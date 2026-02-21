@@ -1,0 +1,185 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Training OS</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.x.x/dist/cdn.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/date-fns@2.29.3/index.min.js"></script>
+    <style>
+        [x-cloak] { display: none !important; }
+    </style>
+</head>
+<body class="bg-gray-50 text-gray-900 font-sans antialiased" x-data="app()">
+
+    <div class="max-w-6xl mx-auto p-6">
+        <!-- Header -->
+        <header class="flex justify-between items-center mb-8">
+            <h1 class="text-3xl font-bold text-gray-800">Training OS</h1>
+            <div class="flex items-center space-x-4">
+                <button @click="prevWeek()" class="px-3 py-1 bg-white border rounded shadow-sm hover:bg-gray-50">&larr; Prev</button>
+                <span class="font-semibold text-lg" x-text="`Week ${currentWeek} - ${currentYear}`"></span>
+                <button @click="nextWeek()" class="px-3 py-1 bg-white border rounded shadow-sm hover:bg-gray-50">Next &rarr;</button>
+            </div>
+        </header>
+
+        <div class="grid grid-cols-1 lg:grid-cols-4 gap-6">
+            
+            <!-- Left Sidebar: Weekly Plan -->
+            <div class="lg:col-span-1 bg-white p-5 rounded-lg shadow-sm border border-gray-200">
+                <div class="flex justify-between items-center mb-4">
+                    <h2 class="text-xl font-semibold">Weekly Plan</h2>
+                    <button @click="editPlan = !editPlan" class="text-sm text-blue-600 hover:underline" x-text="editPlan ? 'Cancel' : 'Edit'"></button>
+                </div>
+
+                <!-- View Mode -->
+                <div x-show="!editPlan" x-cloak>
+                    <p class="text-gray-700 whitespace-pre-wrap mb-4" x-text="plan.description || 'No plan set for this week.'"></p>
+                    <div class="space-y-2 text-sm text-gray-600">
+                        <p><strong>Target Distance:</strong> <span x-text="plan.target_distance_km ? plan.target_distance_km + ' km' : '-'"></span></p>
+                        <p><strong>Target Sessions:</strong> <span x-text="plan.target_sessions || '-'"></span></p>
+                    </div>
+                </div>
+
+                <!-- Edit Mode -->
+                <form x-show="editPlan" @submit.prevent="savePlan()" x-cloak class="space-y-3">
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700">Description (Intent)</label>
+                        <textarea x-model="planForm.description" rows="4" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm border p-2"></textarea>
+                    </div>
+                    <div class="grid grid-cols-2 gap-2">
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700">Target Km</label>
+                            <input type="number" step="0.1" x-model="planForm.target_distance_km" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm border p-2">
+                        </div>
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700">Sessions</label>
+                            <input type="number" x-model="planForm.target_sessions" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm border p-2">
+                        </div>
+                    </div>
+                    <button type="submit" class="w-full bg-blue-600 text-white py-2 px-4 rounded hover:bg-blue-700 text-sm font-medium">Save Plan</button>
+                </form>
+
+                <!-- Weekly Summary (Actuals) -->
+                <div class="mt-8 pt-6 border-t border-gray-200">
+                    <h3 class="text-lg font-semibold mb-3">Actuals</h3>
+                    <div class="space-y-2 text-sm text-gray-600">
+                        <p><strong>Total Distance:</strong> <span x-text="summary.total_distance_km + ' km'"></span></p>
+                        <p><strong>Total Duration:</strong> <span x-text="Math.floor(summary.total_duration_minutes / 60) + 'h ' + (summary.total_duration_minutes % 60) + 'm'"></span></p>
+                        <p><strong>Total Elevation:</strong> <span x-text="summary.total_elevation_gain_m + ' m'"></span></p>
+                        <p><strong>Sessions:</strong> <span x-text="summary.sessions.length"></span></p>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Right Area: Calendar View -->
+            <div class="lg:col-span-3">
+                <div class="grid grid-cols-1 md:grid-cols-7 gap-4">
+                    <template x-for="day in weekDays" :key="day.dateStr">
+                        <div class="bg-white rounded-lg shadow-sm border border-gray-200 flex flex-col h-full min-h-[200px]">
+                            <!-- Day Header -->
+                            <div class="p-3 border-b border-gray-100 bg-gray-50 rounded-t-lg flex justify-between items-center">
+                                <div>
+                                    <div class="text-xs text-gray-500 uppercase font-semibold" x-text="day.dayName"></div>
+                                    <div class="text-lg font-bold text-gray-800" x-text="day.dayNumber"></div>
+                                </div>
+                                <button @click="openSessionModal(day.dateStr)" class="text-gray-400 hover:text-blue-600" title="Add Session">
+                                    <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"></path></svg>
+                                </button>
+                            </div>
+
+                            <!-- Day Content -->
+                            <div class="p-3 flex-1 flex flex-col gap-2 overflow-y-auto">
+                                <!-- Sessions -->
+                                <template x-for="session in getSessionsForDate(day.dateStr)" :key="session.id">
+                                    <div @click="editSession(session)" class="p-2 rounded text-sm cursor-pointer hover:opacity-80 text-white" :class="getTypeColor(session.type)">
+                                        <div class="font-semibold capitalize" x-text="session.type"></div>
+                                        <div class="text-xs opacity-90" x-text="formatSessionDetails(session)"></div>
+                                    </div>
+                                </template>
+
+                                <!-- Day Note -->
+                                <div class="mt-auto pt-2">
+                                    <div x-show="getDayNote(day.dateStr)" class="text-xs text-gray-600 bg-yellow-50 p-2 rounded border border-yellow-100 cursor-pointer" @click="openNoteModal(day.dateStr)">
+                                        <span class="font-semibold">Note:</span> <span x-text="getDayNote(day.dateStr)?.note" class="line-clamp-2"></span>
+                                    </div>
+                                    <button x-show="!getDayNote(day.dateStr)" @click="openNoteModal(day.dateStr)" class="text-xs text-gray-400 hover:text-gray-600 w-full text-left mt-1">+ Add note</button>
+                                </div>
+                            </div>
+                        </div>
+                    </template>
+                </div>
+            </div>
+        </div>
+
+        <!-- Session Modal -->
+        <div x-show="isSessionModalOpen" class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50" x-cloak>
+            <div class="bg-white rounded-lg p-6 w-full max-w-md" @click.away="isSessionModalOpen = false">
+                <h3 class="text-lg font-bold mb-4" x-text="sessionForm.id ? 'Edit Session' : 'Add Session'"></h3>
+                <form @submit.prevent="saveSession()" class="space-y-4">
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700">Type</label>
+                        <select x-model="sessionForm.type" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm border p-2" required>
+                            <option value="run">Run</option>
+                            <option value="trail">Trail</option>
+                            <option value="strength">Strength</option>
+                            <option value="mobility">Mobility</option>
+                            <option value="other">Other</option>
+                        </select>
+                    </div>
+                    <div class="grid grid-cols-2 gap-4">
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700">Duration (min)</label>
+                            <input type="number" x-model="sessionForm.duration_minutes" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm border p-2" required>
+                        </div>
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700">Distance (km)</label>
+                            <input type="number" step="0.1" x-model="sessionForm.distance_km" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm border p-2">
+                        </div>
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700">Elevation (m)</label>
+                            <input type="number" x-model="sessionForm.elevation_gain_m" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm border p-2">
+                        </div>
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700">Intensity (1-10)</label>
+                            <input type="number" min="1" max="10" x-model="sessionForm.perceived_intensity" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm border p-2">
+                        </div>
+                    </div>
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700">Notes</label>
+                        <textarea x-model="sessionForm.notes" rows="3" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm border p-2"></textarea>
+                    </div>
+                    <div class="flex justify-between pt-4">
+                        <button type="button" x-show="sessionForm.id" @click="deleteSession()" class="text-red-600 hover:text-red-800 text-sm font-medium">Delete</button>
+                        <div class="flex space-x-3 ml-auto">
+                            <button type="button" @click="isSessionModalOpen = false" class="bg-white border border-gray-300 text-gray-700 py-2 px-4 rounded hover:bg-gray-50 text-sm font-medium">Cancel</button>
+                            <button type="submit" class="bg-blue-600 text-white py-2 px-4 rounded hover:bg-blue-700 text-sm font-medium">Save</button>
+                        </div>
+                    </div>
+                </form>
+            </div>
+        </div>
+
+        <!-- Note Modal -->
+        <div x-show="isNoteModalOpen" class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50" x-cloak>
+            <div class="bg-white rounded-lg p-6 w-full max-w-md" @click.away="isNoteModalOpen = false">
+                <h3 class="text-lg font-bold mb-4">Day Note</h3>
+                <form @submit.prevent="saveNote()" class="space-y-4">
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700">Context, fatigue, stress...</label>
+                        <textarea x-model="noteForm.note" rows="4" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm border p-2" required></textarea>
+                    </div>
+                    <div class="flex justify-end space-x-3 pt-4">
+                        <button type="button" @click="isNoteModalOpen = false" class="bg-white border border-gray-300 text-gray-700 py-2 px-4 rounded hover:bg-gray-50 text-sm font-medium">Cancel</button>
+                        <button type="submit" class="bg-blue-600 text-white py-2 px-4 rounded hover:bg-blue-700 text-sm font-medium">Save</button>
+                    </div>
+                </form>
+            </div>
+        </div>
+
+    </div>
+
+    <script src="app.js"></script>
+</body>
+</html>
