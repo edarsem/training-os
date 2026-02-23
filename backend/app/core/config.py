@@ -11,5 +11,11 @@ class Settings(BaseSettings):
     DATABASE_URL: str = f"sqlite:///{(DATA_DIR / 'training_os.db').as_posix()}"
     FIT_IMPORT_DIR: Path = BASE_DIR / "data" / "fit_exports"
     REPORTS_DIR: Path = BASE_DIR / "data" / "reports"
+    STRAVA_TOKEN_STORE_PATH: Path = DATA_DIR / "strava_tokens.json"
+
+    STRAVA_CLIENT_ID: str | None = None
+    STRAVA_CLIENT_SECRET: str | None = None
+    STRAVA_API_BASE_URL: str = "https://www.strava.com/api/v3"
+    STRAVA_OAUTH_URL: str = "https://www.strava.com/oauth/token"
 
 settings = Settings()

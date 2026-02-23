@@ -11,8 +11,13 @@ class Session(Base):
     external_id = Column(String, unique=True, index=True, nullable=True)
     type = Column(String, index=True, nullable=False) # run, trail, swim, bike, hike, skate, strength, mobility, other
     duration_minutes = Column(Integer, nullable=False)
+    elapsed_duration_minutes = Column(Integer, nullable=True)
+    moving_duration_minutes = Column(Integer, nullable=True)
     distance_km = Column(Float, nullable=True)
     elevation_gain_m = Column(Integer, nullable=True)
+    average_pace_min_per_km = Column(Float, nullable=True)
+    average_heart_rate_bpm = Column(Float, nullable=True)
+    max_heart_rate_bpm = Column(Float, nullable=True)
     perceived_intensity = Column(Integer, nullable=True) # 1-10
     notes = Column(Text, nullable=True)
     

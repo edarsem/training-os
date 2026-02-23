@@ -61,8 +61,12 @@ def extract_session_data_with_fitparse(filepath: str):
     return {
         "start_time": session_msg.get_value('start_time'),
         "total_elapsed_time": session_msg.get_value('total_elapsed_time'),
+        "total_timer_time": session_msg.get_value('total_timer_time'),
         "total_distance": session_msg.get_value('total_distance'),
         "total_ascent": session_msg.get_value('total_ascent'),
+        "avg_speed": session_msg.get_value('avg_speed'),
+        "avg_heart_rate": session_msg.get_value('avg_heart_rate'),
+        "max_heart_rate": session_msg.get_value('max_heart_rate'),
         "sport": session_msg.get_value('sport'),
         "sub_sport": session_msg.get_value('sub_sport'),
         "parser": "fitparse",
@@ -83,8 +87,12 @@ def extract_session_data_with_fitdecode(filepath: str):
     return {
         "start_time": session_data.get('start_time'),
         "total_elapsed_time": session_data.get('total_elapsed_time'),
+        "total_timer_time": session_data.get('total_timer_time'),
         "total_distance": session_data.get('total_distance'),
         "total_ascent": session_data.get('total_ascent'),
+        "avg_speed": session_data.get('avg_speed'),
+        "avg_heart_rate": session_data.get('avg_heart_rate'),
+        "max_heart_rate": session_data.get('max_heart_rate'),
         "sport": session_data.get('sport'),
         "sub_sport": session_data.get('sub_sport'),
         "parser": "fitdecode",
@@ -124,8 +132,12 @@ def import_fit_files():
 
             start_time = session_data.get("start_time")
             total_elapsed_time = session_data.get("total_elapsed_time")
+            total_timer_time = session_data.get("total_timer_time")
             total_distance = session_data.get("total_distance")
             total_ascent = session_data.get("total_ascent")
+            avg_speed = session_data.get("avg_speed")
+            avg_heart_rate = session_data.get("avg_heart_rate")
+            max_heart_rate = session_data.get("max_heart_rate")
             sport = session_data.get("sport")
             sub_sport = session_data.get("sub_sport")
             parser_used = session_data.get("parser")
@@ -137,11 +149,17 @@ def import_fit_files():
             # Ensure start_time is timezone aware (UTC)
             if start_time.tzinfo is None:
                 start_time = start_time.replace(tzinfo=timezone.utc)
-                
-            duration_minutes = int(total_elapsed_time / 60)
+
+            elapsed_duration_minutes = max(1, int(round(total_elapsed_time / 60)))
+            moving_seconds = total_timer_time if total_timer_time is not None else total_elapsed_time
+            moving_duration_minutes = max(1, int(round(moving_seconds / 60)))
+            duration_minutes = elapsed_duration_minutes
             distance_km = round(total_distance / 1000, 2) if total_distance else None
             elevation_gain_m = int(total_ascent) if total_ascent else None
             session_type = map_sport_to_type(sport, sub_sport)
+            average_pace_min_per_km = None
+            if avg_speed and float(avg_speed) > 0:
+                average_pace_min_per_km = round((1000.0 / float(avg_speed)) / 60.0, 3)
             
             new_session = models.Session(
                 date=start_time.date(),
@@ -149,8 +167,13 @@ def import_fit_files():
                 external_id=external_id,
                 type=session_type,
                 duration_minutes=duration_minutes,
+                elapsed_duration_minutes=elapsed_duration_minutes,
+                moving_duration_minutes=moving_duration_minutes,
                 distance_km=distance_km,
                 elevation_gain_m=elevation_gain_m,
+                average_pace_min_per_km=average_pace_min_per_km,
+                average_heart_rate_bpm=float(avg_heart_rate) if avg_heart_rate is not None else None,
+                max_heart_rate_bpm=float(max_heart_rate) if max_heart_rate is not None else None,
                 notes=None
             )
             
