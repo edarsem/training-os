@@ -8,6 +8,12 @@
     <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.x.x/dist/cdn.min.js"></script>
     <style>
         [x-cloak] { display: none !important; }
+        .clamp-3 {
+            display: -webkit-box;
+            -webkit-line-clamp: 3;
+            -webkit-box-orient: vertical;
+            overflow: hidden;
+        }
     </style>
 </head>
 <body class="bg-gray-50 text-gray-900 font-sans antialiased" x-data="app()">
@@ -61,7 +67,10 @@
                         <button @click="prevWeek()" class="px-4 py-2 bg-white border rounded-full shadow-sm hover:bg-gray-50 text-sm font-medium">&larr; Prev Week</button>
                     </div>
                     <div class="justify-self-center text-sm text-gray-600 font-medium" x-text="weekLabel"></div>
-                    <div class="justify-self-end">
+                    <div class="justify-self-end flex items-center gap-2">
+                        <button @click="refreshFromStrava()" :disabled="isRefreshing" class="px-4 py-2 bg-white border rounded-full shadow-sm hover:bg-gray-50 text-sm font-medium disabled:opacity-50">
+                            <span x-text="isRefreshing ? 'Refreshing…' : '⟳ Refresh Strava'"></span>
+                        </button>
                         <button @click="nextWeek()" class="px-4 py-2 bg-white border rounded-full shadow-sm hover:bg-gray-50 text-sm font-medium">Next Week &rarr;</button>
                     </div>
                 </div>
@@ -96,7 +105,7 @@
                                             <span x-text="getTypeLabel(session.type)"></span>
                                         </div>
                                         <div class="text-base opacity-95 whitespace-pre-line leading-snug" x-text="formatSessionDetails(session)"></div>
-                                        <div x-show="session.notes" class="text-xs opacity-80 mt-1 line-clamp-1" x-text="session.notes"></div>
+                                        <div x-show="getSessionNoteDisplay(session)" class="text-sm opacity-90 mt-1 whitespace-pre-line leading-snug clamp-3" x-text="getSessionNoteDisplay(session)"></div>
                                     </div>
                                 </template>
                             </div>

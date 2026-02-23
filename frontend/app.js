@@ -82,6 +82,7 @@ document.addEventListener('alpine:init', () => {
 
         isSessionModalOpen: false,
         sessionForm: { id: null, date: '', start_time: null, time_str: '', type: 'run', duration_minutes: 60, distance_km: null, elevation_gain_m: null, perceived_intensity: null, notes: '', strength_focuses: [] },
+        isRefreshing: false,
 
         isNoteModalOpen: false,
         noteForm: { date: '', note: '' },
@@ -226,10 +227,10 @@ document.addEventListener('alpine:init', () => {
 
             const strengthMinutes = sessions
                 .filter((session) => session.type === 'strength')
-                .reduce((sum, session) => sum + (session.duration_minutes || 0), 0);
+                .reduce((sum, session) => sum + (session.moving_duration_minutes || session.duration_minutes || 0), 0);
 
             const totalMinutes = sessions
-                .reduce((sum, session) => sum + (session.duration_minutes || 0), 0);
+                .reduce((sum, session) => sum + (session.moving_duration_minutes || session.duration_minutes || 0), 0);
 
             this.weekStats = {
                 runTrailKm: this.formatKm(runTrailKm),
@@ -248,12 +249,33 @@ document.addEventListener('alpine:init', () => {
         },
 
         formatSessionDetails(session) {
-            const parts = [this.formatDuration(session.duration_minutes)];
+            const movingMinutes = session.moving_duration_minutes || session.duration_minutes;
+            const elapsedMinutes = session.elapsed_duration_minutes || session.duration_minutes;
+
+            const parts = [this.formatDuration(movingMinutes)];
+            if (elapsedMinutes && elapsedMinutes !== movingMinutes) {
+                parts.push(`elapsed ${this.formatDuration(elapsedMinutes)}`);
+            }
             if (session.distance_km && ['run', 'trail', 'bike', 'hike', 'swim', 'skate'].includes(session.type)) {
                 parts.push(`${this.formatKm(session.distance_km)} km`);
             }
             if (session.elevation_gain_m && ['trail', 'hike'].includes(session.type)) {
                 parts.push(`${session.elevation_gain_m} m+`);
+            }
+            if (session.average_pace_min_per_km && ['run', 'trail', 'hike'].includes(session.type)) {
+                const pace = Number(session.average_pace_min_per_km);
+                const mins = Math.floor(pace);
+                const secs = Math.round((pace - mins) * 60);
+                parts.push(`${mins}:${String(secs).padStart(2, '0')} /km`);
+            }
+            if (session.average_heart_rate_bpm) {
+                const avgHr = Math.round(session.average_heart_rate_bpm);
+                if (session.max_heart_rate_bpm) {
+                    const maxHr = Math.round(session.max_heart_rate_bpm);
+                    parts.push(`HR ${avgHr}/${maxHr}`);
+                } else {
+                    parts.push(`HR ${avgHr}`);
+                }
             }
             return parts.join('\n');
         },
@@ -268,6 +290,19 @@ document.addEventListener('alpine:init', () => {
                 .filter((item) => item.length > 0);
             const cleanNotes = notesText.replace(/^\[StrengthFocus:\s*.*?\]\n?/, '');
             return { focuses, cleanNotes };
+        },
+
+        getSessionNoteDisplay(session) {
+            if (!session || !session.notes) return '';
+            if (session.type !== 'strength') return session.notes;
+
+            const parsed = this.parseStrengthMeta(session.notes);
+            const focusText = (parsed.focuses || []).join(', ').trim();
+            const cleanNotes = (parsed.cleanNotes || '').trim();
+
+            if (focusText && cleanNotes) return `${focusText}\n${cleanNotes}`;
+            if (focusText) return focusText;
+            return cleanNotes;
         },
 
         buildNotesWithStrengthMeta(notesText, focuses) {
@@ -399,6 +434,29 @@ document.addEventListener('alpine:init', () => {
                 }
             } catch (e) {
                 console.error("Failed to save note", e);
+            }
+        },
+
+        async refreshFromStrava() {
+            if (this.isRefreshing) return;
+            this.isRefreshing = true;
+            try {
+                const res = await fetch(`${API_BASE}/integrations/strava/import/refresh`, {
+                    method: 'POST'
+                });
+                const data = await res.json();
+                if (!res.ok) {
+                    const detail = data?.detail || 'Strava refresh failed';
+                    console.error('Strava refresh failed:', detail);
+                    return;
+                }
+
+                await this.fetchData();
+                console.log('Strava refresh done', data);
+            } catch (e) {
+                console.error('Failed to refresh Strava activities', e);
+            } finally {
+                this.isRefreshing = false;
             }
         }
     }));
