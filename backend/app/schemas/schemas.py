@@ -5,7 +5,9 @@ from typing import Optional, List
 # --- Session Schemas ---
 class SessionBase(BaseModel):
     date: date
-    type: str = Field(..., description="run, trail, strength, mobility, other")
+    start_time: Optional[datetime] = None
+    external_id: Optional[str] = None
+    type: str = Field(..., description="run, trail, hike, bike, generic, strength, mobility, other")
     duration_minutes: int
     distance_km: Optional[float] = None
     elevation_gain_m: Optional[int] = None

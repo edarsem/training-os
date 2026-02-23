@@ -10,6 +10,8 @@ env/
 # Database
 *.db
 *.sqlite3
+backend/data/*
+!backend/data/README.md
 
 # Node / Frontend
 node_modules/
@@ -19,3 +21,7 @@ dist/
 # Private Prompts
 backend/prompts/private/*
 !backend/prompts/private/README.md
+
+# Legacy reports path (keep docs only)
+backend/reports/*
+!backend/reports/README.md

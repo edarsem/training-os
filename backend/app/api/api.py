@@ -73,8 +73,12 @@ def get_week_summary(year: int, week_number: int, db: Session = Depends(get_db))
     day_notes = crud.get_day_notes_by_date_range(db, start_date, end_date)
     
     total_duration = sum(s.duration_minutes for s in sessions)
-    total_distance = sum(s.distance_km or 0 for s in sessions)
-    total_elevation = sum(s.elevation_gain_m or 0 for s in sessions)
+    
+    # Distance counts for run and trail
+    total_distance = sum(s.distance_km or 0 for s in sessions if s.type in ['run', 'trail'])
+    
+    # Elevation counts for run, trail, and hike
+    total_elevation = sum(s.elevation_gain_m or 0 for s in sessions if s.type in ['run', 'trail', 'hike'])
     
     return schemas.WeekSummaryResponse(
         year=year,

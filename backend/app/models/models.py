@@ -7,7 +7,9 @@ class Session(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     date = Column(Date, index=True, nullable=False)
-    type = Column(String, index=True, nullable=False) # run, trail, strength, mobility, other
+    start_time = Column(DateTime(timezone=True), nullable=True)
+    external_id = Column(String, unique=True, index=True, nullable=True)
+    type = Column(String, index=True, nullable=False) # run, trail, hike, bike, generic, strength, mobility, other
     duration_minutes = Column(Integer, nullable=False)
     distance_km = Column(Float, nullable=True)
     elevation_gain_m = Column(Integer, nullable=True)
