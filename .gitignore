@@ -17,6 +17,8 @@ backend/data/*
 node_modules/
 dist/
 .DS_Store
+frontend/package.json
+frontend/package-lock.json
 
 # Private Prompts
 backend/prompts/private/*
@@ -25,3 +27,5 @@ backend/prompts/private/*
 # Legacy reports path (keep docs only)
 backend/reports/*
 !backend/reports/README.md
+
+.vscode/

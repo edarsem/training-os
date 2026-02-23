@@ -1,39 +1,23 @@
 # Training OS
 
-A clean, extensible, well-structured foundation for a personal training management system.
+Training OS is a personal training tracker with a clean split between:
 
-## Vision
+- **what happened** (sessions + day notes), and
+- **what was planned** (weekly plan text).
 
-The goal of Training OS is not to be a fancy app, but a robust foundation that will later support LLM agents, tool use, and open-source usage. It strictly separates **intent** (what you planned to do) from **reality** (what actually happened).
+It is intentionally simple today, and ready to plug into LLM tooling later.
 
-This separation is crucial for future LLM integration, allowing an AI coach to analyze the delta between the plan and the execution, read your daily notes on fatigue, and suggest adjustments.
+## What this repo currently provides
 
-## Architecture
+- FastAPI backend with SQLite storage
+- Weekly calendar UI (Alpine + Tailwind via CDN)
+- FIT importer with parser fallback (`fitparse` then `fitdecode`)
+- Weekly analysis page with 20-week metric charts
+- Prompt folders split into generic/public and private/local
 
-The project is divided into two main parts:
+## Local setup
 
-1. **Backend (FastAPI + SQLite)**
-   - **Domain-Driven Design**: Clear separation between infrastructure (SQLAlchemy models), application logic (Pydantic schemas), and API endpoints.
-   - **LLM-Friendly API**: Endpoints like `/api/summary/week/{year}/{week}` return clean, structured JSON that is perfect for LLM tool calling (e.g., OpenAI Functions).
-   - **Prompts Directory**: System prompts for future LLM agents are stored as versioned text files in `backend/prompts/`.
-
-2. **Frontend (Alpine.js + Tailwind CSS)**
-   - **Minimal & Boring**: Built with zero build steps using Alpine.js and Tailwind via CDN.
-   - **Calendar View**: A simple weekly view to see the plan alongside actual sessions and daily notes.
-
-## Data Model
-
-- **Actual Data (Reality)**
-  - `Session`: Represents a completed workout (run, trail, strength, etc.) with duration, distance, elevation, and notes.
-  - `DayNote`: Free-text notes for a specific day (context, fatigue, stress).
-- **Training Plan (Intent)**
-  - `WeeklyPlan`: Textual description of the week's goals, target distance, and target sessions.
-
-*Note: Plan and Actual data are never mixed in the same table.*
-
-## How to Run Locally
-
-### 1. Start the Backend
+### Backend
 
 ```bash
 cd backend
@@ -43,25 +27,50 @@ pip install -r requirements.txt
 uvicorn app.main:app --reload
 ```
 
-The API will be available at `http://localhost:8000`.
-You can view the interactive API documentation at `http://localhost:8000/docs`.
+- API root: `http://localhost:8000`
+- API docs: `http://localhost:8000/docs`
 
-### 2. Start the Frontend
-
-Since the frontend is a simple HTML file, you can serve it using any static file server. For example, using Python:
+### Frontend
 
 ```bash
 cd frontend
 python3 -m http.server 3000
 ```
 
-Then open `http://localhost:3000` in your browser.
+- App: `http://localhost:3000`
+- Analysis: `http://localhost:3000/analysis.html`
 
-## Future LLM Integration
+## Data import workflow
 
-This system is designed to be queried by an LLM. In V2, you can add an endpoint that:
+1. Put `.fit` files in `backend/data/fit_exports/`
+2. Run:
 
-1. Fetches the `WeekSummaryResponse` for the current week.
-2. Reads the prompt from `backend/prompts/weekly_analysis_v1.txt`.
-3. Sends both to an LLM (e.g., GPT-4 or Claude 3).
-4. Returns the AI coach's analysis to the frontend.
+```bash
+cd backend
+source venv/bin/activate
+python scripts/import_fit.py
+```
+
+1. Check reports in `backend/data/reports/`
+
+## Repository conventions
+
+- Runtime data stays local under `backend/data/` (ignored in git)
+- Private prompts live in `backend/prompts/private/` (ignored except README)
+- Frontend is static (no npm tooling required)
+
+## API surface (V1)
+
+- `GET /api/sessions?start_date=...&end_date=...`
+- `POST /api/sessions`
+- `PUT /api/sessions/{id}`
+- `DELETE /api/sessions/{id}`
+- `GET /api/day-notes?start_date=...&end_date=...`
+- `POST /api/day-notes`
+- `GET /api/plans/{year}/{week_number}`
+- `POST /api/plans`
+- `GET /api/summary/week/{year}/{week_number}`
+
+## Roadmap
+
+Execution plan and upcoming milestones are tracked in `ROADMAP.md`.
