@@ -66,13 +66,22 @@ document.addEventListener('alpine:init', () => {
             total_distance_km: 0,
             total_elevation_gain_m: 0
         },
+
+        weekStats: {
+            runTrailKm: '0.0',
+            elevationM: 0,
+            swimKm: '0.0',
+            bikeKm: '0.0',
+            strengthTime: "0'",
+            totalTime: "0'"
+        },
         
         plan: {},
         editPlan: false,
         planForm: { description: '', target_distance_km: null, target_sessions: null },
 
         isSessionModalOpen: false,
-        sessionForm: { id: null, date: '', start_time: null, time_str: '', type: 'run', duration_minutes: 60, distance_km: null, elevation_gain_m: null, perceived_intensity: null, notes: '' },
+        sessionForm: { id: null, date: '', start_time: null, time_str: '', type: 'run', duration_minutes: 60, distance_km: null, elevation_gain_m: null, perceived_intensity: null, notes: '', strength_focuses: [] },
 
         isNoteModalOpen: false,
         noteForm: { date: '', note: '' },
@@ -119,6 +128,7 @@ document.addEventListener('alpine:init', () => {
                 if (res.ok) {
                     const data = await res.json();
                     this.summary = data;
+                    this.computeWeekStats();
                     this.plan = data.plan || {};
                     this.planForm = { 
                         description: this.plan.description || '', 
@@ -132,7 +142,19 @@ document.addEventListener('alpine:init', () => {
         },
 
         getSessionsForDate(dateStr) {
-            return this.summary.sessions.filter(s => s.date === dateStr);
+            return this.summary.sessions
+                .filter((session) => session.date === dateStr)
+                .sort((left, right) => {
+                    const leftHasNotes = left.notes && left.notes.trim() !== '';
+                    const rightHasNotes = right.notes && right.notes.trim() !== '';
+                    if (leftHasNotes !== rightHasNotes) {
+                        return leftHasNotes ? -1 : 1;
+                    }
+
+                    const leftTime = left.start_time ? new Date(left.start_time).getTime() : Number.MAX_SAFE_INTEGER;
+                    const rightTime = right.start_time ? new Date(right.start_time).getTime() : Number.MAX_SAFE_INTEGER;
+                    return leftTime - rightTime;
+                });
         },
 
         getDayNote(dateStr) {
@@ -141,16 +163,82 @@ document.addEventListener('alpine:init', () => {
 
         getTypeColor(type) {
             const colors = {
-                run: 'bg-blue-500',
+                run: 'bg-red-500',
                 trail: 'bg-green-600',
+                swim: 'bg-blue-500',
                 hike: 'bg-amber-600',
                 bike: 'bg-orange-500',
+                skate: 'bg-sky-300',
                 strength: 'bg-purple-500',
                 mobility: 'bg-teal-500',
-                generic: 'bg-slate-500',
                 other: 'bg-gray-500'
             };
             return colors[type] || colors.other;
+        },
+
+        getTypeLabel(type) {
+            const labels = {
+                run: '🏃',
+                trail: '🏃',
+                swim: '🏊',
+                hike: '🥾',
+                bike: '🚴',
+                skate: '⛸️',
+                strength: '💪',
+                mobility: '🧘',
+                other: '✨'
+            };
+            if (type === 'generic') return labels.other;
+            return labels[type] || labels.other;
+        },
+
+        formatDuration(minutes) {
+            const wholeMinutes = Math.max(0, Math.round(minutes || 0));
+            const hours = Math.floor(wholeMinutes / 60);
+            const mins = wholeMinutes % 60;
+            if (hours > 0) {
+                return `${hours}h${String(mins).padStart(2, '0')}'`;
+            }
+            return `${mins}'`;
+        },
+
+        formatKm(value) {
+            return (Math.round((value || 0) * 10) / 10).toFixed(1);
+        },
+
+        computeWeekStats() {
+            const sessions = this.summary.sessions || [];
+            const runTrailKm = sessions
+                .filter((session) => ['run', 'trail'].includes(session.type))
+                .reduce((sum, session) => sum + (session.distance_km || 0), 0);
+
+            const elevationM = sessions
+                .filter((session) => ['run', 'trail', 'hike'].includes(session.type))
+                .reduce((sum, session) => sum + (session.elevation_gain_m || 0), 0);
+
+            const swimKm = sessions
+                .filter((session) => session.type === 'swim')
+                .reduce((sum, session) => sum + (session.distance_km || 0), 0);
+
+            const bikeKm = sessions
+                .filter((session) => session.type === 'bike')
+                .reduce((sum, session) => sum + (session.distance_km || 0), 0);
+
+            const strengthMinutes = sessions
+                .filter((session) => session.type === 'strength')
+                .reduce((sum, session) => sum + (session.duration_minutes || 0), 0);
+
+            const totalMinutes = sessions
+                .reduce((sum, session) => sum + (session.duration_minutes || 0), 0);
+
+            this.weekStats = {
+                runTrailKm: this.formatKm(runTrailKm),
+                elevationM: Math.round(elevationM),
+                swimKm: this.formatKm(swimKm),
+                bikeKm: this.formatKm(bikeKm),
+                strengthTime: this.formatDuration(strengthMinutes),
+                totalTime: this.formatDuration(totalMinutes)
+            };
         },
 
         formatTime(dateString) {
@@ -160,10 +248,44 @@ document.addEventListener('alpine:init', () => {
         },
 
         formatSessionDetails(session) {
-            let details = `${session.duration_minutes}m`;
-            if (session.distance_km && ['run', 'trail', 'bike', 'hike'].includes(session.type)) details += ` | ${session.distance_km}km`;
-            if (session.elevation_gain_m && ['run', 'trail', 'bike', 'hike'].includes(session.type)) details += ` | ${session.elevation_gain_m}m+`;
-            return details;
+            const parts = [this.formatDuration(session.duration_minutes)];
+            if (session.distance_km && ['run', 'trail', 'bike', 'hike', 'swim', 'skate'].includes(session.type)) {
+                parts.push(`${this.formatKm(session.distance_km)} km`);
+            }
+            if (session.elevation_gain_m && ['trail', 'hike'].includes(session.type)) {
+                parts.push(`${session.elevation_gain_m} m+`);
+            }
+            return parts.join('\n');
+        },
+
+        parseStrengthMeta(notesText) {
+            if (!notesText) return { focuses: [], cleanNotes: '' };
+            const match = notesText.match(/^\[StrengthFocus:\s*(.*?)\]\n?/);
+            if (!match) return { focuses: [], cleanNotes: notesText };
+            const focuses = match[1]
+                .split(',')
+                .map((item) => item.trim())
+                .filter((item) => item.length > 0);
+            const cleanNotes = notesText.replace(/^\[StrengthFocus:\s*.*?\]\n?/, '');
+            return { focuses, cleanNotes };
+        },
+
+        buildNotesWithStrengthMeta(notesText, focuses) {
+            const clean = (notesText || '').trim();
+            if (!focuses || focuses.length === 0) {
+                return clean || null;
+            }
+            const prefix = `[StrengthFocus: ${focuses.join(', ')}]`;
+            return clean ? `${prefix}\n${clean}` : prefix;
+        },
+
+        toggleStrengthFocus(focus) {
+            const current = this.sessionForm.strength_focuses || [];
+            if (current.includes(focus)) {
+                this.sessionForm.strength_focuses = current.filter((item) => item !== focus);
+            } else {
+                this.sessionForm.strength_focuses = [...current, focus];
+            }
         },
 
         // --- Plan Actions ---
@@ -193,12 +315,18 @@ document.addEventListener('alpine:init', () => {
 
         // --- Session Actions ---
         openSessionModal(dateStr) {
-            this.sessionForm = { id: null, date: dateStr, start_time: null, time_str: '', type: 'run', duration_minutes: 60, distance_km: null, elevation_gain_m: null, perceived_intensity: null, notes: '' };
+            this.sessionForm = { id: null, date: dateStr, start_time: null, time_str: '', type: 'run', duration_minutes: 60, distance_km: null, elevation_gain_m: null, perceived_intensity: null, notes: '', strength_focuses: [] };
             this.isSessionModalOpen = true;
         },
 
         editSession(session) {
-            this.sessionForm = { ...session, time_str: session.start_time ? this.formatTime(session.start_time) : '' };
+            const parsed = this.parseStrengthMeta(session.notes);
+            this.sessionForm = {
+                ...session,
+                time_str: session.start_time ? this.formatTime(session.start_time) : '',
+                notes: parsed.cleanNotes,
+                strength_focuses: parsed.focuses
+            };
             this.isSessionModalOpen = true;
         },
 
@@ -219,7 +347,9 @@ document.addEventListener('alpine:init', () => {
             } else {
                 payload.start_time = null;
             }
+            payload.notes = this.buildNotesWithStrengthMeta(payload.notes, payload.type === 'strength' ? payload.strength_focuses : []);
             delete payload.time_str;
+            delete payload.strength_focuses;
 
             try {
                 const res = await fetch(url, {

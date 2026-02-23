@@ -1,0 +1,31 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>📈 Training OS - Analysis</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="bg-gray-50 text-gray-900 font-sans antialiased">
+  <div class="max-w-screen-2xl mx-auto px-6 py-6">
+    <header class="flex justify-between items-center mb-6">
+      <h1 class="text-3xl font-bold text-gray-800">📈 20-Week Analysis</h1>
+      <a href="index.html" class="px-3 py-1 bg-white border rounded shadow-sm hover:bg-gray-50">← Back to Calendar</a>
+    </header>
+
+    <div class="overflow-y-auto max-h-[78vh] pr-1">
+      <div class="space-y-4 w-full">
+        <div class="bg-white rounded-lg shadow-sm border border-gray-200 p-3"><canvas id="chart-run" height="120"></canvas></div>
+        <div class="bg-white rounded-lg shadow-sm border border-gray-200 p-3"><canvas id="chart-elev" height="120"></canvas></div>
+        <div class="bg-white rounded-lg shadow-sm border border-gray-200 p-3"><canvas id="chart-bike" height="120"></canvas></div>
+        <div class="bg-white rounded-lg shadow-sm border border-gray-200 p-3"><canvas id="chart-swim" height="120"></canvas></div>
+        <div class="bg-white rounded-lg shadow-sm border border-gray-200 p-3"><canvas id="chart-strength" height="120"></canvas></div>
+        <div class="bg-white rounded-lg shadow-sm border border-gray-200 p-3"><canvas id="chart-total" height="120"></canvas></div>
+      </div>
+    </div>
+  </div>
+
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <script src="analysis.js"></script>
+</body>
+</html>

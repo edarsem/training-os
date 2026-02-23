@@ -29,6 +29,8 @@ def map_sport_to_type(sport: str, sub_sport: str) -> str:
         if sub_sport == 'trail':
             return 'trail'
         return 'run'
+    elif sport == 'swimming':
+        return 'swim'
     elif sport == 'cycling':
         return 'bike'
     elif sport == 'hiking' or sub_sport == 'hiking':
@@ -38,12 +40,13 @@ def map_sport_to_type(sport: str, sub_sport: str) -> str:
             return 'trail'
         if sub_sport == 'road':
             return 'run'
-        return 'generic'
+        return 'other'
     elif sport in ['training', 'fitness_equipment', 'strength_training']:
         return 'strength'
     elif sport in ['flexibility_training', 'yoga']:
         return 'mobility'
     return 'other'
+
 
 def extract_session_data_with_fitparse(filepath: str):
     fitfile = fitparse.FitFile(filepath)
@@ -148,7 +151,7 @@ def import_fit_files():
                 duration_minutes=duration_minutes,
                 distance_km=distance_km,
                 elevation_gain_m=elevation_gain_m,
-                notes=f"Imported from {filename} ({parser_used})"
+                notes=None
             )
             
             db.add(new_session)
