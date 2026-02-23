@@ -1,30 +1,56 @@
 # Training OS Roadmap
 
-This roadmap tracks **product evolution and delivery order**.
-For setup and current usage, see `README.md`.
+This document tracks product direction and sequencing.
+For project overview and usage, see README.md.
 
-## Current state
+## Product vision
 
-- [x] Calendar-first training log (sessions + day notes)
-- [x] Weekly plan as separate intent layer
-- [x] Weekly stats and 20-week analysis page
-- [x] FIT import pipeline with fallback parser
-- [x] Local-only runtime data strategy (`backend/data`)
+Build a personal training operating system that is:
 
-## Next & soon
+- reliable for day-to-day execution,
+- rich enough for meaningful load analysis,
+- and ready for assistant-style coaching.
 
-Goal: improve coaching-ready data quality.
+## Current baseline (done)
 
-- [ ] Add explicit session `title` and `description` fields (for future Strava sync)
-- [ ] Add structured strength tags at model/API level (not only notes metadata)
-- [ ] Add block summaries for last 4/8/12 weeks
-- [ ] Add per-sport trend cards (run, bike, swim, strength)
+- Calendar-first workflow for sessions and day notes.
+- Weekly plan separated from actual execution.
+- Weekly stats and trend analysis pages.
+- Dual ingestion strategy (FIT + Strava) with merge behavior.
+- Token-based Strava sync with incremental refresh and full backfill modes.
+- Local-first runtime data architecture.
 
-## LLM integration
+## Near-term priorities
 
-Goal: assistant-ready analysis and suggestions.
+Focus: make data quality and UX strong enough for consistent training decisions.
 
-- [ ] LLM client abstraction in backend
-- [ ] Weekly analysis endpoint using prompt files
-- [ ] UI panel for AI coaching summary
-- [ ] Prompt version selector + evaluation notes
+- [ ] Improve session readability in UI for long notes and context-heavy sessions.
+- [ ] Normalize sport/type taxonomy for cleaner analytics.
+- [ ] Add clearer source provenance markers (manual / FIT / Strava) in views.
+- [ ] Add explicit model-level fields for title and description (separate from notes).
+- [ ] Add block summaries over rolling 4/8/12 weeks.
+
+## Load analytics phase
+
+Focus: move from descriptive tracking to actionable training-load monitoring.
+
+- [ ] Define first training-load model from available summary metrics.
+- [ ] Add sport-aware load aggregation and monotony/strain indicators.
+- [ ] Add alerting thresholds for fatigue/risk patterns.
+- [ ] Add confidence indicators when source metrics are incomplete.
+
+## Coaching assistant phase
+
+Focus: turn data into weekly guidance while preserving user control.
+
+- [ ] Introduce backend LLM client abstraction.
+- [ ] Add weekly coaching summary endpoint (structured + narrative).
+- [ ] Add UI coaching panel with transparent rationale.
+- [ ] Add prompt/version tracking for repeatable quality.
+
+## Principles for future work
+
+- Keep Actuals and Plan separate.
+- Prefer stable data contracts over quick UI hacks.
+- Keep local ownership and privacy defaults.
+- Add complexity only when it unlocks clear training value.
