@@ -22,10 +22,5 @@ frontend/package-lock.json
 
 # Private Prompts
 backend/prompts/private/*
-!backend/prompts/private/README.md
-
-# Legacy reports path (keep docs only)
-backend/reports/*
-!backend/reports/README.md
 
 .vscode/
