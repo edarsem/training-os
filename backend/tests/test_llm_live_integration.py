@@ -25,7 +25,6 @@ class TestLLMLiveIntegration(unittest.TestCase):
             "provider": "mistral",
             "deterministic": True,
             "include_context_in_response": False,
-            "generic_prompt_key": "weekly_analysis_v1.txt",
             "max_sessions_per_level": 15,
             "include_salient_sessions": True,
         }
@@ -45,7 +44,8 @@ class TestLLMLiveIntegration(unittest.TestCase):
         audit = body.get("audit", {})
         self.assertEqual(audit.get("provider"), "mistral")
         self.assertIn("week", audit.get("levels", []))
-        self.assertEqual(audit.get("prompt_generic_key"), "weekly_analysis_v1.txt")
+        self.assertEqual(audit.get("prompt_generic_key"), "system_base.en")
+        self.assertEqual(audit.get("language"), "en")
 
 
 if __name__ == "__main__":

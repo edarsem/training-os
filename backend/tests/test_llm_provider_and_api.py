@@ -58,10 +58,11 @@ class TestLLMProvidersAndAPI(unittest.TestCase):
                         generated_at_utc=schemas.datetime.now(),
                         provider="echo",
                         model="test",
+                        language="en",
                         deterministic=True,
                         levels=["week"],
-                        prompt_generic_key="weekly_analysis_v1.txt",
-                        prompt_generic_path="prompts/generic/weekly_analysis_v1.txt",
+                        prompt_generic_key="system_base.en.txt",
+                        prompt_generic_path="prompts/generic/system_base.en.txt",
                     ),
                 )
 

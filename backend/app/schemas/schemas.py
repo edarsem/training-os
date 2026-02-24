@@ -148,6 +148,7 @@ class LLMContextLevel(str, Enum):
 class LLMInterpretRequest(BaseModel):
     query: str = Field(..., min_length=1)
     levels: List[LLMContextLevel] = Field(default_factory=lambda: [LLMContextLevel.week])
+    language: Optional[str] = None
 
     anchor_year: Optional[int] = None
     anchor_week: Optional[int] = None
@@ -160,7 +161,7 @@ class LLMInterpretRequest(BaseModel):
     salient_duration_minutes_threshold: int = Field(default=90, ge=1)
     max_sessions_per_level: int = Field(default=50, ge=1, le=500)
 
-    generic_prompt_key: str = "weekly_analysis_v1.txt"
+    generic_prompt_key: Optional[str] = None
     private_prompt_key: Optional[str] = None
 
     provider: Optional[str] = None
@@ -175,6 +176,7 @@ class LLMAuditResponse(BaseModel):
     generated_at_utc: datetime
     provider: str
     model: str
+    language: str
     deterministic: bool
     levels: List[str]
     window: dict[str, Any] = Field(default_factory=dict)

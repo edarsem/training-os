@@ -22,9 +22,52 @@ class TrainingOSLLMService:
         context = context_builder.build_context(request)
 
         prompt_repo = PromptRepository(settings.BASE_DIR / "prompts")
-        prompt_bundle = prompt_repo.resolve(
-            generic_key=request.generic_prompt_key,
-            private_key=request.private_prompt_key,
+        language = (request.language or settings.LLM_USER_LANGUAGE or settings.LLM_DEFAULT_LANGUAGE).strip().lower()
+        default_language = (settings.LLM_DEFAULT_LANGUAGE or "en").strip().lower()
+
+        generic_candidates: list[str]
+        if request.generic_prompt_key:
+            generic_candidates = [request.generic_prompt_key]
+        else:
+            base = settings.LLM_GENERIC_PROMPT_BASENAME
+            generic_candidates = [
+                f"{base}.{language}",
+                f"{base}.{default_language}",
+                base,
+            ]
+
+        private_candidates: list[str] = []
+        if request.private_prompt_key:
+            private_candidates.extend(
+                [
+                    f"{request.private_prompt_key}.{language}",
+                    f"{request.private_prompt_key}.{default_language}",
+                    request.private_prompt_key,
+                ]
+            )
+        elif settings.LLM_PRIVATE_PROMPT_BASENAME:
+            base = settings.LLM_PRIVATE_PROMPT_BASENAME
+            private_candidates.extend(
+                [
+                    f"{base}.{language}",
+                    f"{base}.{default_language}",
+                    base,
+                ]
+            )
+
+        template_base = settings.LLM_PRIVATE_TEMPLATE_BASENAME
+        if template_base:
+            private_candidates.extend(
+                [
+                    f"{template_base}.{language}",
+                    f"{template_base}.{default_language}",
+                    template_base,
+                ]
+            )
+
+        prompt_bundle = prompt_repo.resolve_from_candidates(
+            generic_candidates=generic_candidates,
+            private_candidates=private_candidates,
         )
 
         system_prompt_parts = [
@@ -80,6 +123,7 @@ class TrainingOSLLMService:
             generated_at_utc=datetime.now(timezone.utc),
             provider=provider_name,
             model=model_name,
+            language=language,
             deterministic=request.deterministic,
             levels=[level.value for level in request.levels],
             window=context.get("meta", {}).get("window", {}),
