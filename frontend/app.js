@@ -97,20 +97,25 @@ document.addEventListener('alpine:init', () => {
         noteForm: { date: '', note: '' },
 
         chatMessages: [],
+        activeConversationId: null,
         chatInput: '',
         isChatLoading: false,
         chatError: '',
         chatDebug: {
             lastQuery: '',
             lastPayload: null,
+            lastModelInput: null,
+            lastSystemPrompt: '',
             lastContext: null,
             lastAudit: null,
             lastRawResponse: null
         },
 
-        init() {
+        async init() {
             this.updateWeekInfo();
-            this.fetchData();
+            await this.fetchData();
+            await this.loadInitialConversation();
+            this.ensureDatePrefill();
         },
 
         updateWeekInfo() {
@@ -161,6 +166,136 @@ document.addEventListener('alpine:init', () => {
             } catch (e) {
                 console.error("Failed to fetch data", e);
             }
+        },
+
+        getPreferredLocale() {
+            return navigator.language || 'en-US';
+        },
+
+        getDatePrefixLine() {
+            const now = new Date();
+            const locale = this.getPreferredLocale();
+            const formatted = new Intl.DateTimeFormat(locale, {
+                weekday: 'long',
+                day: 'numeric',
+                month: 'long',
+                year: 'numeric'
+            }).format(now);
+            return formatted.charAt(0).toUpperCase() + formatted.slice(1);
+        },
+
+        ensureDatePrefill() {
+            if (this.chatMessages.length > 0) return;
+            if ((this.chatInput || '').trim().length > 0) return;
+            this.chatInput = `${this.getDatePrefixLine()}\n`;
+        },
+
+        getConversationIdFromUrl() {
+            const params = new URLSearchParams(window.location.search);
+            const value = params.get('conversation_id');
+            if (!value) return null;
+            const parsed = Number(value);
+            return Number.isFinite(parsed) ? parsed : null;
+        },
+
+        setConversationIdInUrl(conversationId) {
+            const url = new URL(window.location.href);
+            if (conversationId) {
+                url.searchParams.set('conversation_id', String(conversationId));
+            } else {
+                url.searchParams.delete('conversation_id');
+            }
+            window.history.replaceState({}, '', url.toString());
+        },
+
+        async loadInitialConversation() {
+            const conversationId = this.getConversationIdFromUrl();
+            if (!conversationId) {
+                this.activeConversationId = null;
+                this.chatMessages = [];
+                this.ensureDatePrefill();
+                return;
+            }
+            await this.loadConversationMessages(conversationId);
+            this.ensureDatePrefill();
+        },
+
+        async loadConversationMessages(conversationId) {
+            try {
+                const res = await fetch(`${API_BASE}/chat/conversations/${conversationId}/messages`);
+                if (!res.ok) {
+                    this.activeConversationId = null;
+                    this.setConversationIdInUrl(null);
+                    this.chatMessages = [];
+                    return;
+                }
+                const messages = await res.json();
+                this.activeConversationId = conversationId;
+                this.chatMessages = (messages || []).map((message) => ({
+                    role: message.role,
+                    content: message.content
+                }));
+            } catch (e) {
+                console.error('Failed to load conversation messages', e);
+                this.chatMessages = [];
+                this.activeConversationId = null;
+            }
+        },
+
+        async ensureConversation() {
+            if (this.activeConversationId) return this.activeConversationId;
+            const res = await fetch(`${API_BASE}/chat/conversations`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ title: 'New chat' })
+            });
+            if (!res.ok) {
+                const data = await res.json().catch(() => ({}));
+                throw new Error(data?.detail || 'Failed to create conversation');
+            }
+            const data = await res.json();
+            this.activeConversationId = data.id;
+            this.setConversationIdInUrl(data.id);
+            return data.id;
+        },
+
+        async persistChatMessage(role, content) {
+            const conversationId = await this.ensureConversation();
+            const res = await fetch(`${API_BASE}/chat/conversations/${conversationId}/messages`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ role, content })
+            });
+            if (!res.ok) {
+                const data = await res.json().catch(() => ({}));
+                throw new Error(data?.detail || 'Failed to persist chat message');
+            }
+        },
+
+        async startNewChat() {
+            this.activeConversationId = null;
+            this.chatMessages = [];
+            this.chatError = '';
+            this.chatDebug = {
+                lastQuery: '',
+                lastPayload: null,
+                lastModelInput: null,
+                lastSystemPrompt: '',
+                lastContext: null,
+                lastAudit: null,
+                lastRawResponse: null
+            };
+            this.setConversationIdInUrl(null);
+            this.chatInput = '';
+            this.ensureDatePrefill();
+        },
+
+        ensureDatePrefixForFirstMessage(text) {
+            const datePrefix = this.getDatePrefixLine();
+            const clean = (text || '').trim();
+            if (!clean) return datePrefix;
+            if (clean.startsWith(datePrefix)) return clean;
+            return `${datePrefix}\n${clean}`;
         },
 
         getSessionsForDate(dateStr) {
@@ -485,24 +620,30 @@ document.addEventListener('alpine:init', () => {
             const text = (this.chatInput || '').trim();
             if (!text || this.isChatLoading) return;
 
+            const firstMessage = this.chatMessages.length === 0;
+            const composedText = firstMessage ? this.ensureDatePrefixForFirstMessage(text) : text;
+
             this.chatError = '';
-            this.chatMessages.push({ role: 'user', content: text });
+            this.chatMessages.push({ role: 'user', content: composedText });
             this.chatInput = '';
             this.isChatLoading = true;
 
             try {
+                await this.persistChatMessage('user', composedText);
+
                 const payload = {
-                    query: text,
+                    query: composedText,
                     levels: ['week', 'day', 'session'],
                     anchor_year: this.currentYear,
                     anchor_week: this.currentWeek,
                     deterministic: true,
                     include_context_in_response: true,
+                    include_input_preview: true,
                     include_salient_sessions: true,
                     max_sessions_per_level: 50
                 };
 
-                this.chatDebug.lastQuery = text;
+                this.chatDebug.lastQuery = composedText;
                 this.chatDebug.lastPayload = payload;
 
                 const res = await fetch(`${API_BASE}/llm/interpret`, {
@@ -521,13 +662,18 @@ document.addEventListener('alpine:init', () => {
                     role: 'assistant',
                     content: data?.answer || 'No response.'
                 });
+                await this.persistChatMessage('assistant', data?.answer || 'No response.');
+
                 this.chatDebug.lastRawResponse = data;
+                this.chatDebug.lastModelInput = data?.input_preview?.user_message || null;
+                this.chatDebug.lastSystemPrompt = data?.input_preview?.system_prompt || '';
                 this.chatDebug.lastContext = data?.context || null;
                 this.chatDebug.lastAudit = data?.audit || null;
             } catch (e) {
                 this.chatError = e?.message || 'Failed to send message.';
             } finally {
                 this.isChatLoading = false;
+                this.ensureDatePrefill();
             }
         },
 

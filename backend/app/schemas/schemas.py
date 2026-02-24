@@ -168,6 +168,7 @@ class LLMInterpretRequest(BaseModel):
     model: Optional[str] = None
     deterministic: bool = True
     include_context_in_response: bool = True
+    include_input_preview: bool = False
 
     tool_hints: List[str] = Field(default_factory=list)
 
@@ -188,7 +189,49 @@ class LLMAuditResponse(BaseModel):
     usage: dict[str, Any] = Field(default_factory=dict)
 
 
+class LLMInputPreview(BaseModel):
+    system_prompt: str
+    user_message: str
+    messages: List[dict[str, str]] = Field(default_factory=list)
+
+
 class LLMInterpretResponse(BaseModel):
     answer: str
     context: Optional[dict[str, Any]] = None
+    input_preview: Optional[LLMInputPreview] = None
     audit: LLMAuditResponse
+
+
+class ChatConversationCreate(BaseModel):
+    title: Optional[str] = None
+
+
+class ChatConversationResponse(BaseModel):
+    id: int
+    title: str
+    created_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
+
+    class Config:
+        from_attributes = True
+
+
+class ChatConversationSummaryResponse(ChatConversationResponse):
+    message_count: int = 0
+    last_message_preview: Optional[str] = None
+
+
+class ChatMessageCreate(BaseModel):
+    role: str = Field(..., description="user or assistant")
+    content: str = Field(..., min_length=1)
+
+
+class ChatMessageResponse(BaseModel):
+    id: int
+    conversation_id: int
+    role: str
+    content: str
+    created_at: Optional[datetime] = None
+
+    class Config:
+        from_attributes = True

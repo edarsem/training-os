@@ -26,6 +26,7 @@
             <div class="flex items-center space-x-4">
                 <span class="font-semibold text-lg" x-text="weekLabel"></span>
                 <a href="analysis.html" class="px-3 py-1 bg-white border rounded shadow-sm hover:bg-gray-50">📈 Analysis</a>
+                <a href="chat-history.html" class="px-3 py-1 bg-white border rounded shadow-sm hover:bg-gray-50">🗂️ Chat History</a>
             </div>
         </header>
 
@@ -117,11 +118,14 @@
         </div>
 
         <div class="bg-white p-5 rounded-lg shadow-sm border border-gray-200 mt-6">
-            <h3 class="text-xl font-semibold mb-3">🧠 Coach</h3>
+            <div class="flex items-center justify-between mb-3">
+                <h3 class="text-xl font-semibold">🧠 Coach</h3>
+                <div class="flex items-center gap-2">
+                    <a href="chat-history.html" class="px-3 py-1 bg-white border rounded shadow-sm hover:bg-gray-50 text-sm">History</a>
+                    <button @click="startNewChat()" class="px-3 py-1 bg-white border rounded shadow-sm hover:bg-gray-50 text-sm">New chat</button>
+                </div>
+            </div>
             <div class="border border-gray-200 rounded-md p-3 bg-gray-50 h-72 overflow-y-auto space-y-3">
-                <template x-if="chatMessages.length === 0">
-                    <div class="text-sm text-gray-500">Start by asking a question about your current week.</div>
-                </template>
                 <template x-for="(message, idx) in chatMessages" :key="idx">
                     <div :class="message.role === 'user' ? 'flex justify-end' : 'flex justify-start'">
                         <div :class="message.role === 'user'
@@ -144,6 +148,7 @@
                 <input
                     type="text"
                     x-model="chatInput"
+                    @focus="ensureDatePrefill()"
                     :disabled="isChatLoading"
                     placeholder="Ask the coach about your training..."
                     class="flex-1 rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm border p-2"
@@ -165,7 +170,15 @@
                         <pre class="bg-white border border-gray-200 rounded p-2 overflow-x-auto whitespace-pre-wrap" x-text="formatDebugJson(chatDebug.lastPayload)"></pre>
                     </div>
                     <div>
-                        <p class="font-semibold text-gray-700 mb-1">Last Context Sent To Coach</p>
+                        <p class="font-semibold text-gray-700 mb-1">Last Input Sent To Model (exact user message)</p>
+                        <pre class="bg-white border border-gray-200 rounded p-2 overflow-x-auto whitespace-pre-wrap" x-text="chatDebug.lastModelInput || ''"></pre>
+                    </div>
+                    <div>
+                        <p class="font-semibold text-gray-700 mb-1">Last System Prompt Sent To Model</p>
+                        <pre class="bg-white border border-gray-200 rounded p-2 overflow-x-auto whitespace-pre-wrap" x-text="chatDebug.lastSystemPrompt || ''"></pre>
+                    </div>
+                    <div>
+                        <p class="font-semibold text-gray-700 mb-1">Last Context Object</p>
                         <pre class="bg-white border border-gray-200 rounded p-2 overflow-x-auto whitespace-pre-wrap" x-text="formatDebugJson(chatDebug.lastContext)"></pre>
                     </div>
                     <div>

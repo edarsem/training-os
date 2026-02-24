@@ -95,10 +95,11 @@ class TrainingOSLLMService:
                 "max_bullets": 8,
             },
         }
+        user_message_content = json.dumps(user_payload, ensure_ascii=False, sort_keys=True)
 
         messages = [
             {"role": "system", "content": system_prompt},
-            {"role": "user", "content": json.dumps(user_payload, ensure_ascii=False, sort_keys=True)},
+            {"role": "user", "content": user_message_content},
         ]
 
         provider_name = request.provider or settings.LLM_PROVIDER
@@ -138,6 +139,15 @@ class TrainingOSLLMService:
         return schemas.LLMInterpretResponse(
             answer=answer,
             context=context if request.include_context_in_response else None,
+            input_preview=(
+                schemas.LLMInputPreview(
+                    system_prompt=system_prompt,
+                    user_message=user_message_content,
+                    messages=messages,
+                )
+                if request.include_input_preview
+                else None
+            ),
             audit=audit,
         )
 

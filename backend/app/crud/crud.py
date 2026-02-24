@@ -78,3 +78,58 @@ def upsert_weekly_plan(db: DBSession, plan: schemas.WeeklyPlanCreate) -> models.
     db.commit()
     db.refresh(db_plan)
     return db_plan
+
+
+# --- Chat Conversations ---
+def list_chat_conversations(db: DBSession, limit: int = 100) -> List[models.ChatConversation]:
+    return db.query(models.ChatConversation).order_by(models.ChatConversation.updated_at.desc(), models.ChatConversation.id.desc()).limit(limit).all()
+
+
+def get_chat_conversation(db: DBSession, conversation_id: int) -> Optional[models.ChatConversation]:
+    return db.query(models.ChatConversation).filter(models.ChatConversation.id == conversation_id).first()
+
+
+def create_chat_conversation(db: DBSession, title: Optional[str] = None) -> models.ChatConversation:
+    value = (title or "New chat").strip() or "New chat"
+    conversation = models.ChatConversation(title=value)
+    db.add(conversation)
+    db.commit()
+    db.refresh(conversation)
+    return conversation
+
+
+def delete_chat_conversation(db: DBSession, conversation_id: int) -> bool:
+    conversation = get_chat_conversation(db, conversation_id)
+    if not conversation:
+        return False
+    db.delete(conversation)
+    db.commit()
+    return True
+
+
+def list_chat_messages(db: DBSession, conversation_id: int) -> List[models.ChatMessage]:
+    return (
+        db.query(models.ChatMessage)
+        .filter(models.ChatMessage.conversation_id == conversation_id)
+        .order_by(models.ChatMessage.created_at.asc(), models.ChatMessage.id.asc())
+        .all()
+    )
+
+
+def create_chat_message(db: DBSession, conversation_id: int, role: str, content: str) -> models.ChatMessage:
+    message = models.ChatMessage(
+        conversation_id=conversation_id,
+        role=role,
+        content=content,
+    )
+    db.add(message)
+
+    conversation = get_chat_conversation(db, conversation_id)
+    if conversation:
+        if role == "user" and (conversation.title or "").strip() in {"", "New chat"}:
+            first_line = (content or "").splitlines()[0].strip() if content else ""
+            conversation.title = first_line[:80] if first_line else "New chat"
+
+    db.commit()
+    db.refresh(message)
+    return message

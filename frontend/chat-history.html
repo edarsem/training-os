@@ -1,0 +1,50 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>🗂️ Coach Chat History</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.x.x/dist/cdn.min.js"></script>
+</head>
+<body class="bg-gray-50 text-gray-900 font-sans antialiased" x-data="chatHistoryApp()" x-init="init()">
+    <div class="max-w-5xl mx-auto px-8 py-6">
+        <header class="flex items-center justify-between mb-6">
+            <h1 class="text-2xl font-bold text-gray-800">🗂️ Coach Chat History</h1>
+            <div class="flex items-center gap-2">
+                <button @click="createAndOpenConversation()" class="px-3 py-2 bg-blue-600 text-white rounded hover:bg-blue-700 text-sm font-medium">New chat</button>
+                <a href="index.html" class="px-3 py-2 bg-white border rounded shadow-sm hover:bg-gray-50 text-sm">Back to Training OS</a>
+            </div>
+        </header>
+
+        <div class="bg-white rounded-lg border border-gray-200 shadow-sm">
+            <div class="p-4 border-b border-gray-100 text-sm text-gray-600" x-show="isLoading">Loading conversations…</div>
+            <div class="p-4 border-b border-gray-100 text-sm text-red-600" x-show="error" x-text="error"></div>
+
+            <div x-show="!isLoading && conversations.length === 0" class="p-6 text-sm text-gray-500">
+                No previous conversations yet.
+            </div>
+
+            <template x-for="conversation in conversations" :key="conversation.id">
+                <div class="p-4 border-b border-gray-100 last:border-b-0 flex items-start justify-between gap-4">
+                    <div class="min-w-0">
+                        <p class="font-semibold text-gray-800 truncate" x-text="conversation.title"></p>
+                        <p class="text-xs text-gray-500 mt-1">
+                            <span x-text="formatDate(conversation.updated_at)"></span>
+                            <span> · </span>
+                            <span x-text="`${conversation.message_count} messages`"></span>
+                        </p>
+                        <p class="text-sm text-gray-600 mt-2 line-clamp-2" x-text="conversation.last_message_preview || ''"></p>
+                    </div>
+                    <div class="flex items-center gap-2 shrink-0">
+                        <a :href="`index.html?conversation_id=${conversation.id}`" class="px-3 py-1 bg-white border rounded hover:bg-gray-50 text-sm">Continue</a>
+                        <button @click="deleteConversation(conversation.id)" class="px-3 py-1 bg-white border rounded hover:bg-gray-50 text-sm text-red-600">Delete</button>
+                    </div>
+                </div>
+            </template>
+        </div>
+    </div>
+
+    <script src="chat-history.js"></script>
+</body>
+</html>

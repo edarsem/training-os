@@ -290,6 +290,63 @@ def upsert_weekly_plan(plan: schemas.WeeklyPlanCreate, db: Session = Depends(get
     """Create or update a weekly plan."""
     return crud.upsert_weekly_plan(db, plan)
 
+
+# --- Chat History ---
+@router.get("/chat/conversations", response_model=List[schemas.ChatConversationSummaryResponse])
+def list_chat_conversations(db: Session = Depends(get_db), limit: int = Query(default=100, ge=1, le=500)):
+    conversations = crud.list_chat_conversations(db, limit=limit)
+    out: List[schemas.ChatConversationSummaryResponse] = []
+    for conversation in conversations:
+        messages = crud.list_chat_messages(db, conversation.id)
+        if len(messages) == 0:
+            continue
+        last_content = messages[-1].content if messages else None
+        out.append(
+            schemas.ChatConversationSummaryResponse(
+                id=conversation.id,
+                title=conversation.title,
+                created_at=conversation.created_at,
+                updated_at=conversation.updated_at,
+                message_count=len(messages),
+                last_message_preview=(last_content[:140] if last_content else None),
+            )
+        )
+    return out
+
+
+@router.post("/chat/conversations", response_model=schemas.ChatConversationResponse)
+def create_chat_conversation(payload: schemas.ChatConversationCreate, db: Session = Depends(get_db)):
+    return crud.create_chat_conversation(db, title=payload.title)
+
+
+@router.delete("/chat/conversations/{conversation_id}")
+def delete_chat_conversation(conversation_id: int, db: Session = Depends(get_db)):
+    success = crud.delete_chat_conversation(db, conversation_id)
+    if not success:
+        raise HTTPException(status_code=404, detail="Conversation not found")
+    return {"ok": True}
+
+
+@router.get("/chat/conversations/{conversation_id}/messages", response_model=List[schemas.ChatMessageResponse])
+def list_chat_messages(conversation_id: int, db: Session = Depends(get_db)):
+    conversation = crud.get_chat_conversation(db, conversation_id)
+    if not conversation:
+        raise HTTPException(status_code=404, detail="Conversation not found")
+    return crud.list_chat_messages(db, conversation_id)
+
+
+@router.post("/chat/conversations/{conversation_id}/messages", response_model=schemas.ChatMessageResponse)
+def create_chat_message(conversation_id: int, payload: schemas.ChatMessageCreate, db: Session = Depends(get_db)):
+    conversation = crud.get_chat_conversation(db, conversation_id)
+    if not conversation:
+        raise HTTPException(status_code=404, detail="Conversation not found")
+
+    role = (payload.role or "").strip().lower()
+    if role not in {"user", "assistant"}:
+        raise HTTPException(status_code=400, detail="Invalid role. Use 'user' or 'assistant'.")
+
+    return crud.create_chat_message(db, conversation_id, role=role, content=payload.content)
+
 # --- Intelligence / Summaries ---
 @router.get("/summary/week/{year}/{week_number}", response_model=schemas.WeekSummaryResponse)
 def get_week_summary(year: int, week_number: int, db: Session = Depends(get_db)):
