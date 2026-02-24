@@ -23,4 +23,7 @@ frontend/package-lock.json
 # Private Prompts
 backend/prompts/private/*
 
+# Local command cheat sheet
+COMMANDS.local.md
+
 .vscode/

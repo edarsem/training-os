@@ -51,6 +51,15 @@ function formatMonthDayYear(date) {
     return new Intl.DateTimeFormat('en-US', { month: 'short', day: 'numeric', year: 'numeric' }).format(date);
 }
 
+function escapeHtml(text) {
+    return String(text || '')
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#039;');
+}
+
 document.addEventListener('alpine:init', () => {
     Alpine.data('app', () => ({
         currentDate: new Date(),
@@ -86,6 +95,18 @@ document.addEventListener('alpine:init', () => {
 
         isNoteModalOpen: false,
         noteForm: { date: '', note: '' },
+
+        chatMessages: [],
+        chatInput: '',
+        isChatLoading: false,
+        chatError: '',
+        chatDebug: {
+            lastQuery: '',
+            lastPayload: null,
+            lastContext: null,
+            lastAudit: null,
+            lastRawResponse: null
+        },
 
         init() {
             this.updateWeekInfo();
@@ -458,6 +479,106 @@ document.addEventListener('alpine:init', () => {
             } finally {
                 this.isRefreshing = false;
             }
+        },
+
+        async sendChatMessage() {
+            const text = (this.chatInput || '').trim();
+            if (!text || this.isChatLoading) return;
+
+            this.chatError = '';
+            this.chatMessages.push({ role: 'user', content: text });
+            this.chatInput = '';
+            this.isChatLoading = true;
+
+            try {
+                const payload = {
+                    query: text,
+                    levels: ['week', 'day', 'session'],
+                    anchor_year: this.currentYear,
+                    anchor_week: this.currentWeek,
+                    deterministic: true,
+                    include_context_in_response: true,
+                    include_salient_sessions: true,
+                    max_sessions_per_level: 50
+                };
+
+                this.chatDebug.lastQuery = text;
+                this.chatDebug.lastPayload = payload;
+
+                const res = await fetch(`${API_BASE}/llm/interpret`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload)
+                });
+
+                const data = await res.json();
+                if (!res.ok) {
+                    const detail = data?.detail || 'LLM request failed';
+                    throw new Error(detail);
+                }
+
+                this.chatMessages.push({
+                    role: 'assistant',
+                    content: data?.answer || 'No response.'
+                });
+                this.chatDebug.lastRawResponse = data;
+                this.chatDebug.lastContext = data?.context || null;
+                this.chatDebug.lastAudit = data?.audit || null;
+            } catch (e) {
+                this.chatError = e?.message || 'Failed to send message.';
+            } finally {
+                this.isChatLoading = false;
+            }
+        },
+
+        formatDebugJson(value) {
+            if (value === null || value === undefined) return '';
+            try {
+                return JSON.stringify(value, null, 2);
+            } catch {
+                return String(value);
+            }
+        },
+
+        renderCoachMarkdown(text) {
+            const source = String(text || '');
+            const escaped = escapeHtml(source);
+
+            const blocks = escaped.split(/\n\n+/);
+            const htmlBlocks = blocks.map((block) => {
+                const trimmed = block.trim();
+                if (!trimmed) return '';
+
+                const listLines = trimmed.split('\n');
+                const allUnordered = listLines.every((line) => /^\s*[-*]\s+/.test(line));
+                if (allUnordered) {
+                    const items = listLines
+                        .map((line) => line.replace(/^\s*[-*]\s+/, '').trim())
+                        .map((line) => `<li>${this.renderMarkdownInline(line)}</li>`)
+                        .join('');
+                    return `<ul class="list-disc pl-5 space-y-1">${items}</ul>`;
+                }
+
+                const allOrdered = listLines.every((line) => /^\s*\d+\.\s+/.test(line));
+                if (allOrdered) {
+                    const items = listLines
+                        .map((line) => line.replace(/^\s*\d+\.\s+/, '').trim())
+                        .map((line) => `<li>${this.renderMarkdownInline(line)}</li>`)
+                        .join('');
+                    return `<ol class="list-decimal pl-5 space-y-1">${items}</ol>`;
+                }
+
+                return `<p>${this.renderMarkdownInline(trimmed).replace(/\n/g, '<br>')}</p>`;
+            });
+
+            return htmlBlocks.join('');
+        },
+
+        renderMarkdownInline(text) {
+            return text
+                .replace(/`([^`]+)`/g, '<code class="bg-gray-100 px-1 rounded text-[12px]">$1</code>')
+                .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
+                .replace(/\*([^*]+)\*/g, '<em>$1</em>');
         }
     }));
 });
