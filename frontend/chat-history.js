@@ -32,7 +32,6 @@ document.addEventListener('alpine:init', () => {
         },
 
         async deleteConversation(conversationId) {
-            if (!confirm('Delete this conversation?')) return;
             try {
                 const res = await fetch(`${API_BASE}/chat/conversations/${conversationId}`, {
                     method: 'DELETE'

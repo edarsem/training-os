@@ -145,14 +145,14 @@
             <p x-show="chatError" x-text="chatError" class="text-sm text-red-600 mt-2"></p>
 
             <form @submit.prevent="sendChatMessage()" class="mt-3 flex items-center gap-2">
-                <input
-                    type="text"
+                <textarea
                     x-model="chatInput"
-                    @focus="ensureDatePrefill()"
+                    @keydown.enter.exact.prevent="sendChatMessage()"
                     :disabled="isChatLoading"
                     placeholder="Ask the coach about your training..."
-                    class="flex-1 rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm border p-2"
-                >
+                    rows="2"
+                    class="flex-1 rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm border p-2 resize-y"
+                ></textarea>
                 <button type="submit" :disabled="isChatLoading || !chatInput.trim()" class="bg-blue-600 text-white py-2 px-4 rounded hover:bg-blue-700 text-sm font-medium disabled:opacity-50">
                     <span x-text="isChatLoading ? 'Sending…' : 'Send'"></span>
                 </button>

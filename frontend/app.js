@@ -115,7 +115,6 @@ document.addEventListener('alpine:init', () => {
             this.updateWeekInfo();
             await this.fetchData();
             await this.loadInitialConversation();
-            this.ensureDatePrefill();
         },
 
         updateWeekInfo() {
@@ -168,28 +167,6 @@ document.addEventListener('alpine:init', () => {
             }
         },
 
-        getPreferredLocale() {
-            return navigator.language || 'en-US';
-        },
-
-        getDatePrefixLine() {
-            const now = new Date();
-            const locale = this.getPreferredLocale();
-            const formatted = new Intl.DateTimeFormat(locale, {
-                weekday: 'long',
-                day: 'numeric',
-                month: 'long',
-                year: 'numeric'
-            }).format(now);
-            return formatted.charAt(0).toUpperCase() + formatted.slice(1);
-        },
-
-        ensureDatePrefill() {
-            if (this.chatMessages.length > 0) return;
-            if ((this.chatInput || '').trim().length > 0) return;
-            this.chatInput = `${this.getDatePrefixLine()}\n`;
-        },
-
         getConversationIdFromUrl() {
             const params = new URLSearchParams(window.location.search);
             const value = params.get('conversation_id');
@@ -213,11 +190,9 @@ document.addEventListener('alpine:init', () => {
             if (!conversationId) {
                 this.activeConversationId = null;
                 this.chatMessages = [];
-                this.ensureDatePrefill();
                 return;
             }
             await this.loadConversationMessages(conversationId);
-            this.ensureDatePrefill();
         },
 
         async loadConversationMessages(conversationId) {
@@ -287,15 +262,6 @@ document.addEventListener('alpine:init', () => {
             };
             this.setConversationIdInUrl(null);
             this.chatInput = '';
-            this.ensureDatePrefill();
-        },
-
-        ensureDatePrefixForFirstMessage(text) {
-            const datePrefix = this.getDatePrefixLine();
-            const clean = (text || '').trim();
-            if (!clean) return datePrefix;
-            if (clean.startsWith(datePrefix)) return clean;
-            return `${datePrefix}\n${clean}`;
         },
 
         getSessionsForDate(dateStr) {
@@ -619,9 +585,7 @@ document.addEventListener('alpine:init', () => {
         async sendChatMessage() {
             const text = (this.chatInput || '').trim();
             if (!text || this.isChatLoading) return;
-
-            const firstMessage = this.chatMessages.length === 0;
-            const composedText = firstMessage ? this.ensureDatePrefixForFirstMessage(text) : text;
+            const composedText = text;
 
             this.chatError = '';
             this.chatMessages.push({ role: 'user', content: composedText });
@@ -631,17 +595,12 @@ document.addEventListener('alpine:init', () => {
             try {
                 await this.persistChatMessage('user', composedText);
 
-                const payload = {
-                    query: composedText,
-                    levels: ['week', 'day', 'session'],
-                    anchor_year: this.currentYear,
-                    anchor_week: this.currentWeek,
-                    deterministic: true,
-                    include_context_in_response: true,
-                    include_input_preview: true,
-                    include_salient_sessions: true,
-                    max_sessions_per_level: 50
-                };
+                    const payload = {
+                        query: composedText,
+                        deterministic: true,
+                        include_context_in_response: true,
+                        include_input_preview: true
+                    };
 
                 this.chatDebug.lastQuery = composedText;
                 this.chatDebug.lastPayload = payload;
@@ -673,7 +632,6 @@ document.addEventListener('alpine:init', () => {
                 this.chatError = e?.message || 'Failed to send message.';
             } finally {
                 this.isChatLoading = false;
-                this.ensureDatePrefill();
             }
         },
 
