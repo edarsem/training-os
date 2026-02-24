@@ -1,0 +1,18 @@
+# Profil de l'athlète (Modèle)
+
+**Complétez et ajoutez toute information que vous souhaitez que Training OS connaisse à votre sujet.
+
+Nom :
+Date de naissance :
+Taille :
+Poids :
+Informations physiologiques (pour calibrer sur votre montre ou d'autres appareils, si vous en avez):
+ex Max FC, FC Seuil, FC au repos, VO2max estimé
+
+Parcours sportif :
+
+Objectifs :
+
+Autres intérêts ou hobbies :
+
+Comment vous souhaitez que Training OS vous aide / communique avec vous / pourquoi vous voulez l'utiliser...
