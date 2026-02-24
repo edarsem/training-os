@@ -4,6 +4,7 @@ from typing import List
 from datetime import date, datetime, timedelta
 from app.core.database import get_db
 from app.core.strava import StravaAPIError, StravaClient, StravaConfigError
+from app.llm.service import LLMConfigurationError, LLMProviderError, TrainingOSLLMService
 from app.models import models
 from app.schemas import schemas
 from app.crud import crud
@@ -495,3 +496,24 @@ def backfill_strava_activities(
         auto_refreshed_token=auto_refreshed_any,
         items=items,
     )
+
+
+@router.post(
+    "/llm/interpret",
+    response_model=schemas.LLMInterpretResponse,
+)
+def interpret_training_data_with_llm(
+    payload: schemas.LLMInterpretRequest,
+    db: Session = Depends(get_db),
+):
+    service = TrainingOSLLMService(db)
+    try:
+        return service.interpret(payload)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except LLMConfigurationError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except LLMProviderError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc

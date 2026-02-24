@@ -18,4 +18,12 @@ class Settings(BaseSettings):
     STRAVA_API_BASE_URL: str = "https://www.strava.com/api/v3"
     STRAVA_OAUTH_URL: str = "https://www.strava.com/oauth/token"
 
+    LLM_PROVIDER: str = "mistral"
+    MISTRAL_API_KEY: str | None = None
+    MISTRAL_API_BASE_URL: str = "https://api.mistral.ai/v1"
+    MISTRAL_MODEL: str = "mistral-small-latest"
+    LLM_TIMEOUT_SECONDS: int = 45
+    LLM_MAX_TOKENS: int = 2000
+    LLM_TEMPERATURE: float = 0.5
+
 settings = Settings()

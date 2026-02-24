@@ -1,6 +1,7 @@
+from enum import Enum
 from pydantic import BaseModel, Field
 from datetime import date, datetime
-from typing import Optional, List
+from typing import Any, Optional, List
 
 # --- Session Schemas ---
 class SessionBase(BaseModel):
@@ -134,3 +135,58 @@ class StravaImportResponse(BaseModel):
     skipped_count: int
     auto_refreshed_token: bool
     items: List[StravaImportItemResponse] = []
+
+
+class LLMContextLevel(str, Enum):
+    session = "session"
+    day = "day"
+    week = "week"
+    multi_week = "multi_week"
+    block = "block"
+
+
+class LLMInterpretRequest(BaseModel):
+    query: str = Field(..., min_length=1)
+    levels: List[LLMContextLevel] = Field(default_factory=lambda: [LLMContextLevel.week])
+
+    anchor_year: Optional[int] = None
+    anchor_week: Optional[int] = None
+    date_start: Optional[date] = None
+    date_end: Optional[date] = None
+    multi_week_count: int = Field(default=4, ge=1, le=24)
+
+    include_salient_sessions: bool = True
+    salient_distance_km_threshold: float = Field(default=15.0, ge=0)
+    salient_duration_minutes_threshold: int = Field(default=90, ge=1)
+    max_sessions_per_level: int = Field(default=50, ge=1, le=500)
+
+    generic_prompt_key: str = "weekly_analysis_v1.txt"
+    private_prompt_key: Optional[str] = None
+
+    provider: Optional[str] = None
+    model: Optional[str] = None
+    deterministic: bool = True
+    include_context_in_response: bool = True
+
+    tool_hints: List[str] = Field(default_factory=list)
+
+
+class LLMAuditResponse(BaseModel):
+    generated_at_utc: datetime
+    provider: str
+    model: str
+    deterministic: bool
+    levels: List[str]
+    window: dict[str, Any] = Field(default_factory=dict)
+    prompt_generic_key: str
+    prompt_generic_path: str
+    prompt_private_key: Optional[str] = None
+    prompt_private_path: Optional[str] = None
+    tool_hints: List[str] = Field(default_factory=list)
+    usage: dict[str, Any] = Field(default_factory=dict)
+
+
+class LLMInterpretResponse(BaseModel):
+    answer: str
+    context: Optional[dict[str, Any]] = None
+    audit: LLMAuditResponse
