@@ -99,6 +99,12 @@ document.addEventListener('alpine:init', () => {
         chatMessages: [],
         activeConversationId: null,
         chatInput: '',
+        chatModelOptions: [
+            'mistral-small-latest',
+            'mistral-medium-latest',
+            'mistral-large-latest'
+        ],
+        selectedChatModel: 'mistral-small-latest',
         isChatLoading: false,
         chatError: '',
         chatDebug: {
@@ -111,9 +117,40 @@ document.addEventListener('alpine:init', () => {
         },
 
         async init() {
+            this.initializeChatModelSelection();
             this.updateWeekInfo();
             await this.fetchData();
             await this.loadInitialConversation();
+        },
+
+        initializeChatModelSelection() {
+            const stored = localStorage.getItem('training_os_chat_model');
+            if (stored && this.chatModelOptions.includes(stored)) {
+                this.selectedChatModel = stored;
+            } else {
+                this.selectedChatModel = this.chatModelOptions[0];
+                localStorage.setItem('training_os_chat_model', this.selectedChatModel);
+            }
+        },
+
+        setChatModel(modelName) {
+            if (!this.chatModelOptions.includes(modelName)) return;
+            this.selectedChatModel = modelName;
+            localStorage.setItem('training_os_chat_model', modelName);
+        },
+
+        handleChatInputKeydown(event) {
+            if (!event || event.isComposing) return;
+            if (event.key !== 'Enter') return;
+
+            if (event.shiftKey) {
+                return;
+            }
+
+            event.preventDefault();
+            if (!this.isChatLoading && (this.chatInput || '').trim()) {
+                this.sendChatMessage();
+            }
         },
 
         updateWeekInfo() {
@@ -368,36 +405,34 @@ document.addEventListener('alpine:init', () => {
             return `${d.getHours().toString().padStart(2, '0')}:${d.getMinutes().toString().padStart(2, '0')}`;
         },
 
-        formatSessionDetails(session) {
+        formatSessionCompactDuration(session) {
             const movingMinutes = session.moving_duration_minutes || session.duration_minutes;
-            const elapsedMinutes = session.elapsed_duration_minutes || session.duration_minutes;
+            return this.formatDuration(movingMinutes);
+        },
 
-            const parts = [this.formatDuration(movingMinutes)];
-            if (elapsedMinutes && elapsedMinutes !== movingMinutes) {
-                parts.push(`elapsed ${this.formatDuration(elapsedMinutes)}`);
+        formatSessionCompactDistance(session) {
+            if (!session.distance_km || !['run', 'trail', 'bike', 'hike', 'swim', 'skate'].includes(session.type)) {
+                return '';
             }
-            if (session.distance_km && ['run', 'trail', 'bike', 'hike', 'swim', 'skate'].includes(session.type)) {
-                parts.push(`${this.formatKm(session.distance_km)} km`);
+            return `${this.formatKm(session.distance_km)} km`;
+        },
+
+        formatPace(value) {
+            const pace = Number(value);
+            if (!Number.isFinite(pace) || pace <= 0) return '';
+            const mins = Math.floor(pace);
+            const secs = Math.round((pace - mins) * 60);
+            return `${mins}:${String(secs).padStart(2, '0')} /km`;
+        },
+
+        formatHeartRate(avg, max) {
+            if (!avg) return '';
+            const avgHr = Math.round(avg);
+            if (max) {
+                const maxHr = Math.round(max);
+                return `${avgHr}/${maxHr} bpm`;
             }
-            if (session.elevation_gain_m && ['trail', 'hike'].includes(session.type)) {
-                parts.push(`${session.elevation_gain_m} m+`);
-            }
-            if (session.average_pace_min_per_km && ['run', 'trail', 'hike'].includes(session.type)) {
-                const pace = Number(session.average_pace_min_per_km);
-                const mins = Math.floor(pace);
-                const secs = Math.round((pace - mins) * 60);
-                parts.push(`${mins}:${String(secs).padStart(2, '0')} /km`);
-            }
-            if (session.average_heart_rate_bpm) {
-                const avgHr = Math.round(session.average_heart_rate_bpm);
-                if (session.max_heart_rate_bpm) {
-                    const maxHr = Math.round(session.max_heart_rate_bpm);
-                    parts.push(`HR ${avgHr}/${maxHr}`);
-                } else {
-                    parts.push(`HR ${avgHr}`);
-                }
-            }
-            return parts.join('\n');
+            return `${avgHr} bpm`;
         },
 
         parseStrengthMeta(notesText) {
@@ -496,11 +531,12 @@ document.addEventListener('alpine:init', () => {
             if (payload.elevation_gain_m === "") payload.elevation_gain_m = null;
             if (payload.perceived_intensity === "") payload.perceived_intensity = null;
             
-            if (payload.time_str) {
-                // Combine date and time_str into a valid ISO string
-                payload.start_time = new Date(`${payload.date}T${payload.time_str}:00`).toISOString();
-            } else {
-                payload.start_time = null;
+            if (!isEdit) {
+                if (payload.time_str) {
+                    payload.start_time = new Date(`${payload.date}T${payload.time_str}:00`).toISOString();
+                } else {
+                    payload.start_time = null;
+                }
             }
             payload.notes = this.buildNotesWithStrengthMeta(payload.notes, payload.type === 'strength' ? payload.strength_focuses : []);
             delete payload.time_str;
@@ -595,6 +631,7 @@ document.addEventListener('alpine:init', () => {
 
                     const payload = {
                         query: composedText,
+                        model: this.selectedChatModel,
                         deterministic: true,
                         include_context_in_response: true,
                         include_input_preview: true

@@ -202,6 +202,7 @@ class TrainingOSLLMService:
     ) -> schemas.LLMInterpretResponse:
         now_iso = datetime.now(timezone.utc).date().isoformat()
         user_payload = {
+            "current_utc_date": now_iso,
             "question": request.query,
             "now_iso_date": now_iso,
             "locale": language,
@@ -209,17 +210,19 @@ class TrainingOSLLMService:
             "fallback_anchor_week": request.anchor_week,
             "instruction": (
                 "Use tools to fetch only the minimum data required to answer accurately. "
-                "Always resolve ambiguous temporal references with resolve_time_reference before fetching summary data. "
-                "If a range is returned, choose the most relevant tool for that range (day/week/session-level reasoning as needed)."
+                "Prefer calling data tools directly with explicit ISO dates/ranges whenever you can infer them from the user query. "
+                "Use temporal_ref only when ISO values are not explicit or are relative/ambiguous (e.g., last monday, last month). "
+                "For comparisons like 'janvier vs juillet', call get_block_summary for each explicit month range directly; do not call resolve_time_reference first."
             ),
         }
-        user_message_content = json.dumps(user_payload, ensure_ascii=False, sort_keys=True)
+        user_message_content = json.dumps(user_payload, ensure_ascii=False)
 
         messages: list[dict[str, Any]] = [
             {
                 "role": "system",
                 "content": (
                     f"{system_prompt}\n\n"
+                    f"Current UTC date anchor: {now_iso}.\n"
                     "MCP mode is enabled. You MUST use tools when data is needed. "
                     "Do not claim missing data before trying appropriate tools. "
                     "Prefer minimal tool calls and minimal data volume."
