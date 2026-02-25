@@ -105,8 +105,7 @@ document.addEventListener('alpine:init', () => {
             lastQuery: '',
             lastPayload: null,
             lastModelInput: null,
-            lastSystemPrompt: '',
-            lastContext: null,
+            lastMcpTrace: null,
             lastAudit: null,
             lastRawResponse: null
         },
@@ -255,8 +254,7 @@ document.addEventListener('alpine:init', () => {
                 lastQuery: '',
                 lastPayload: null,
                 lastModelInput: null,
-                lastSystemPrompt: '',
-                lastContext: null,
+                lastMcpTrace: null,
                 lastAudit: null,
                 lastRawResponse: null
             };
@@ -625,8 +623,7 @@ document.addEventListener('alpine:init', () => {
 
                 this.chatDebug.lastRawResponse = data;
                 this.chatDebug.lastModelInput = data?.input_preview?.user_message || null;
-                this.chatDebug.lastSystemPrompt = data?.input_preview?.system_prompt || '';
-                this.chatDebug.lastContext = data?.context || null;
+                this.chatDebug.lastMcpTrace = data?.mcp_trace || data?.context?.mcp_trace || null;
                 this.chatDebug.lastAudit = data?.audit || null;
             } catch (e) {
                 this.chatError = e?.message || 'Failed to send message.';
@@ -652,6 +649,22 @@ document.addEventListener('alpine:init', () => {
             const htmlBlocks = blocks.map((block) => {
                 const trimmed = block.trim();
                 if (!trimmed) return '';
+
+                const headingMatch = trimmed.match(/^(#{1,6})\s+(.+)$/);
+                if (headingMatch) {
+                    const level = Math.min(6, headingMatch[1].length);
+                    const content = this.renderMarkdownInline(headingMatch[2].trim());
+                    if (level <= 2) {
+                        return `<h${level} class="font-semibold text-gray-900 mt-3 mb-1">${content}</h${level}>`;
+                    }
+                    if (level === 3) {
+                        return `<h3 class="font-semibold text-gray-900 mt-2 mb-1">${content}</h3>`;
+                    }
+                    if (level === 4) {
+                        return `<h4 class="font-medium text-gray-900 mt-2 mb-1">${content}</h4>`;
+                    }
+                    return `<h${level} class="font-medium text-gray-800 mt-1 mb-1">${content}</h${level}>`;
+                }
 
                 const listLines = trimmed.split('\n');
                 const allUnordered = listLines.every((line) => /^\s*[-*]\s+/.test(line));

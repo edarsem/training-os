@@ -30,5 +30,7 @@ class Settings(BaseSettings):
     LLM_GENERIC_PROMPT_BASENAME: str = "system_base"
     LLM_PRIVATE_PROMPT_BASENAME: str | None = None
     LLM_PRIVATE_TEMPLATE_BASENAME: str = "profile"
+    LLM_MCP_ENABLED: bool = True
+    LLM_MCP_MAX_TOOL_CALLS: int = 4
 
 settings = Settings()

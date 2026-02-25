@@ -192,13 +192,14 @@ class LLMAuditResponse(BaseModel):
 class LLMInputPreview(BaseModel):
     system_prompt: str
     user_message: str
-    messages: List[dict[str, str]] = Field(default_factory=list)
+    messages: List[dict[str, Any]] = Field(default_factory=list)
 
 
 class LLMInterpretResponse(BaseModel):
     answer: str
     context: Optional[dict[str, Any]] = None
     input_preview: Optional[LLMInputPreview] = None
+    mcp_trace: Optional[List[dict[str, Any]]] = None
     audit: LLMAuditResponse
 
 

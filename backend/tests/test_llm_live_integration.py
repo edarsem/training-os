@@ -43,7 +43,7 @@ class TestLLMLiveIntegration(unittest.TestCase):
 
         audit = body.get("audit", {})
         self.assertEqual(audit.get("provider"), "mistral")
-        self.assertIn("week", audit.get("levels", []))
+        self.assertIn("mcp", audit.get("levels", []))
         self.assertEqual(audit.get("prompt_generic_key"), "system_base.en")
         self.assertEqual(audit.get("language"), "en")
 

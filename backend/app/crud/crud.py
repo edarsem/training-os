@@ -15,6 +15,10 @@ def get_sessions_by_date_range(db: DBSession, start_date: date, end_date: date) 
         models.Session.id.asc()
     ).all()
 
+
+def get_session_by_id(db: DBSession, session_id: int) -> Optional[models.Session]:
+    return db.query(models.Session).filter(models.Session.id == session_id).first()
+
 def create_session(db: DBSession, session: schemas.SessionCreate) -> models.Session:
     db_session = models.Session(**session.model_dump())
     db.add(db_session)

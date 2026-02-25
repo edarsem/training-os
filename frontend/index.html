@@ -176,12 +176,8 @@
                         <pre class="bg-white border border-gray-200 rounded p-2 overflow-x-auto whitespace-pre-wrap" x-text="chatDebug.lastModelInput || ''"></pre>
                     </div>
                     <div>
-                        <p class="font-semibold text-gray-700 mb-1">Last System Prompt Sent To Model</p>
-                        <pre class="bg-white border border-gray-200 rounded p-2 overflow-x-auto whitespace-pre-wrap" x-text="chatDebug.lastSystemPrompt || ''"></pre>
-                    </div>
-                    <div>
-                        <p class="font-semibold text-gray-700 mb-1">Last Context Object</p>
-                        <pre class="bg-white border border-gray-200 rounded p-2 overflow-x-auto whitespace-pre-wrap" x-text="formatDebugJson(chatDebug.lastContext)"></pre>
+                        <p class="font-semibold text-gray-700 mb-1">Last MCP Trace</p>
+                        <pre class="bg-white border border-gray-200 rounded p-2 overflow-x-auto whitespace-pre-wrap" x-text="formatDebugJson(chatDebug.lastMcpTrace)"></pre>
                     </div>
                     <div>
                         <p class="font-semibold text-gray-700 mb-1">Last Audit</p>
