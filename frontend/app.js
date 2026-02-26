@@ -161,6 +161,24 @@ document.addEventListener('alpine:init', () => {
             localStorage.setItem('training_os_chat_model', modelName);
         },
 
+        getEffectiveChatModel() {
+            const selected = String(this.selectedChatModel || '').trim();
+            if (this.chatModelOptions.includes(selected)) {
+                return selected;
+            }
+
+            const stored = localStorage.getItem('training_os_chat_model');
+            if (stored && this.chatModelOptions.includes(stored)) {
+                this.selectedChatModel = stored;
+                return stored;
+            }
+
+            const fallback = this.chatModelOptions[0];
+            this.selectedChatModel = fallback;
+            localStorage.setItem('training_os_chat_model', fallback);
+            return fallback;
+        },
+
         handleChatInputKeydown(event) {
             if (!event || event.isComposing) return;
             if (event.key !== 'Enter') return;
@@ -659,9 +677,12 @@ document.addEventListener('alpine:init', () => {
                     await this.persistChatMessage('user', composedText);
                 }
 
+                    const effectiveModel = this.getEffectiveChatModel();
+                    this.setChatModel(effectiveModel);
+
                     const payload = {
                         query: composedText,
-                        model: this.selectedChatModel,
+                        model: effectiveModel,
                         deterministic: true,
                         include_context_in_response: true,
                         include_input_preview: true
