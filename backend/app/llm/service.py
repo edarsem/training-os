@@ -212,7 +212,8 @@ class TrainingOSLLMService:
                 "Use tools to fetch only the minimum data required to answer accurately. "
                 "Prefer calling data tools directly with explicit ISO dates/ranges whenever you can infer them from the user query. "
                 "Use temporal_ref only when ISO values are not explicit or are relative/ambiguous (e.g., last monday, last month). "
-                "For comparisons like 'janvier vs juillet', call get_block_summary for each explicit month range directly; do not call resolve_time_reference first."
+                "For comparisons like 'janvier vs juillet', call get_block_summary for each explicit month range directly; do not call resolve_time_reference first. "
+                "When ready to respond to the user, call submit_final_answer with the full final answer text."
             ),
         }
         user_message_content = json.dumps(user_payload, ensure_ascii=False)
@@ -294,6 +295,27 @@ class TrainingOSLLMService:
                             language=lang or language,
                         ),
                     )
+
+                    if name == "submit_final_answer":
+                        answer = str(tool_result.get("final_answer") or "").strip()
+                        mcp_trace.append(
+                            {
+                                "type": "tool_call",
+                                "name": name,
+                                "arguments": arguments,
+                                "result_preview": {"status": tool_result.get("status", "ok")},
+                            }
+                        )
+                        messages.append(
+                            {
+                                "role": "tool",
+                                "tool_call_id": call_id,
+                                "name": name,
+                                "content": json.dumps(tool_result, ensure_ascii=False),
+                            }
+                        )
+                        break
+
                     mcp_trace.append(
                         {
                             "type": "tool_call",
@@ -312,14 +334,30 @@ class TrainingOSLLMService:
                         }
                     )
 
+                if answer:
+                    mcp_trace.append({"type": "final_answer", "content": answer})
+                    break
+
                 continue
 
-            answer = assistant_content
-            mcp_trace.append({"type": "final_answer", "content": answer})
-            break
+            if assistant_content:
+                mcp_trace.append({"type": "assistant_intermediate", "content": assistant_content})
+                messages.append(
+                    {
+                        "role": "assistant",
+                        "content": assistant_content,
+                    }
+                )
+                messages.append(
+                    {
+                        "role": "user",
+                        "content": "Finalize now by calling submit_final_answer with the response for the user.",
+                    }
+                )
+                continue
 
         if not answer:
-            answer = "I could not complete the MCP tool workflow for this request."
+            answer = "I could not complete the MCP tool workflow for this request with submit_final_answer."
 
         context_payload = {
             "mcp_trace": mcp_trace,

@@ -480,6 +480,21 @@ def get_mcp_tools_schema() -> list[dict[str, Any]]:
                 },
             },
         },
+        {
+            "type": "function",
+            "function": {
+                "name": "submit_final_answer",
+                "description": "Submit the final user-facing answer once tool usage is complete.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "answer": {"type": "string"},
+                    },
+                    "required": ["answer"],
+                    "additionalProperties": False,
+                },
+            },
+        },
     ]
 
 
@@ -554,5 +569,11 @@ def execute_mcp_tool(
             end_iso=end_iso,
             temporal_resolution=temporal_resolution,
         )
+
+    if name == "submit_final_answer":
+        return {
+            "final_answer": str(arguments.get("answer") or "").strip(),
+            "status": "ok",
+        }
 
     raise ValueError(f"Unknown MCP tool '{name}'")
