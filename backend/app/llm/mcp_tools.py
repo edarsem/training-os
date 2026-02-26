@@ -395,7 +395,7 @@ def get_mcp_tools_schema() -> list[dict[str, Any]]:
             "type": "function",
             "function": {
                 "name": "resolve_time_reference",
-                "description": "Resolve natural language time references into either a single date or an explicit date range.",
+                "description": "Resolve natural language time references into either a single date or an explicit date range. Use it to resolve ambiguous or relative temporal expressions (e.g., 'last monday', 'next week', 'month of janvier') into explicit ISO date values. When the reference implies a period longer than a week or is ambiguous, return a range. Always return a label that can be used to refer to the resolved time in the final answer.",
                 "parameters": {
                     "type": "object",
                     "properties": {
@@ -412,7 +412,7 @@ def get_mcp_tools_schema() -> list[dict[str, Any]]:
             "type": "function",
             "function": {
                 "name": "get_week_summary",
-                "description": "Get summary metrics, plan and notes for the ISO week that contains a date. Use date_iso when possible; otherwise provide temporal_ref with now_iso_date.",
+                "description": "Get summary metrics, plan and notes for the ISO week that contains a date. Use date_iso when possible with any day of this week; otherwise provide temporal_ref with now_iso_date.",
                 "parameters": {
                     "type": "object",
                     "properties": {

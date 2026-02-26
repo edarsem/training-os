@@ -212,7 +212,7 @@ class TrainingOSLLMService:
                 "Use tools to fetch only the minimum data required to answer accurately. "
                 "Prefer calling data tools directly with explicit ISO dates/ranges whenever you can infer them from the user query. "
                 "Use temporal_ref only when ISO values are not explicit or are relative/ambiguous (e.g., last monday, last month). "
-                "For comparisons like 'janvier vs juillet', call get_block_summary for each explicit month range directly; do not call resolve_time_reference first. "
+                "Requesting on a narrow level (session, day) gives more granular data, requeting on a broad level (week, block) gives aggregated data. "
                 "When ready to respond to the user, call submit_final_answer with the full final answer text."
             ),
         }
@@ -407,7 +407,7 @@ class TrainingOSLLMService:
         system_prompt = (
             "You resolve temporal expressions into either a single date or an explicit date range. "
             "Return strict JSON only with keys: mode, reference_date_iso, range_start_iso, range_end_iso, label. "
-            "mode must be exactly one of: date, range. "
+            "mode must be exactly one of: date, range. Give a range when the query implies a period longer than a week or when the reference is ambiguous. "
             "For mode=date, provide reference_date_iso (YYYY-MM-DD). "
             "For mode=range, provide range_start_iso and range_end_iso (YYYY-MM-DD)."
         )
