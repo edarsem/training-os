@@ -99,12 +99,14 @@ document.addEventListener('alpine:init', () => {
         chatMessages: [],
         activeConversationId: null,
         chatInput: '',
+        saveChatHistory: false,
         chatModelOptions: [
             'mistral-small-latest',
             'mistral-medium-latest',
             'mistral-large-latest'
         ],
         selectedChatModel: 'mistral-small-latest',
+        markdownConfigured: false,
         isChatLoading: false,
         chatError: '',
         chatDebug: {
@@ -117,10 +119,30 @@ document.addEventListener('alpine:init', () => {
         },
 
         async init() {
+            this.initializeChatHistoryPreference();
             this.initializeChatModelSelection();
             this.updateWeekInfo();
             await this.fetchData();
             await this.loadInitialConversation();
+        },
+
+        initializeChatHistoryPreference() {
+            const stored = localStorage.getItem('training_os_save_chat_history');
+            if (stored === null) {
+                this.saveChatHistory = false;
+                localStorage.setItem('training_os_save_chat_history', 'false');
+                return;
+            }
+            this.saveChatHistory = stored === 'true';
+        },
+
+        setSaveChatHistory(enabled) {
+            this.saveChatHistory = Boolean(enabled);
+            localStorage.setItem('training_os_save_chat_history', this.saveChatHistory ? 'true' : 'false');
+            if (!this.saveChatHistory) {
+                this.activeConversationId = null;
+                this.setConversationIdInUrl(null);
+            }
         },
 
         initializeChatModelSelection() {
@@ -222,6 +244,11 @@ document.addEventListener('alpine:init', () => {
         },
 
         async loadInitialConversation() {
+            if (!this.saveChatHistory) {
+                this.activeConversationId = null;
+                this.chatMessages = [];
+                return;
+            }
             const conversationId = this.getConversationIdFromUrl();
             if (!conversationId) {
                 this.activeConversationId = null;
@@ -271,6 +298,7 @@ document.addEventListener('alpine:init', () => {
         },
 
         async persistChatMessage(role, content) {
+            if (!this.saveChatHistory) return;
             const conversationId = await this.ensureConversation();
             const res = await fetch(`${API_BASE}/chat/conversations/${conversationId}/messages`, {
                 method: 'POST',
@@ -627,7 +655,9 @@ document.addEventListener('alpine:init', () => {
             this.isChatLoading = true;
 
             try {
-                await this.persistChatMessage('user', composedText);
+                if (this.saveChatHistory) {
+                    await this.persistChatMessage('user', composedText);
+                }
 
                     const payload = {
                         query: composedText,
@@ -656,7 +686,9 @@ document.addEventListener('alpine:init', () => {
                     role: 'assistant',
                     content: data?.answer || 'No response.'
                 });
-                await this.persistChatMessage('assistant', data?.answer || 'No response.');
+                if (this.saveChatHistory) {
+                    await this.persistChatMessage('assistant', data?.answer || 'No response.');
+                }
 
                 this.chatDebug.lastRawResponse = data;
                 this.chatDebug.lastModelInput = data?.input_preview?.user_message || null;
@@ -680,52 +712,25 @@ document.addEventListener('alpine:init', () => {
 
         renderCoachMarkdown(text) {
             const source = String(text || '');
-            const escaped = escapeHtml(source);
+            const markedLib = window.marked;
+            const purifier = window.DOMPurify;
 
-            const blocks = escaped.split(/\n\n+/);
-            const htmlBlocks = blocks.map((block) => {
-                const trimmed = block.trim();
-                if (!trimmed) return '';
+            if (!markedLib || !purifier) {
+                return `<pre>${escapeHtml(source)}</pre>`;
+            }
 
-                const headingMatch = trimmed.match(/^(#{1,6})\s+(.+)$/);
-                if (headingMatch) {
-                    const level = Math.min(6, headingMatch[1].length);
-                    const content = this.renderMarkdownInline(headingMatch[2].trim());
-                    if (level <= 2) {
-                        return `<h${level} class="font-semibold text-gray-900 mt-3 mb-1">${content}</h${level}>`;
-                    }
-                    if (level === 3) {
-                        return `<h3 class="font-semibold text-gray-900 mt-2 mb-1">${content}</h3>`;
-                    }
-                    if (level === 4) {
-                        return `<h4 class="font-medium text-gray-900 mt-2 mb-1">${content}</h4>`;
-                    }
-                    return `<h${level} class="font-medium text-gray-800 mt-1 mb-1">${content}</h${level}>`;
-                }
+            if (!this.markdownConfigured && typeof markedLib.setOptions === 'function') {
+                markedLib.setOptions({
+                    gfm: true,
+                    breaks: true,
+                    headerIds: false,
+                    mangle: false,
+                });
+                this.markdownConfigured = true;
+            }
 
-                const listLines = trimmed.split('\n');
-                const allUnordered = listLines.every((line) => /^\s*[-*]\s+/.test(line));
-                if (allUnordered) {
-                    const items = listLines
-                        .map((line) => line.replace(/^\s*[-*]\s+/, '').trim())
-                        .map((line) => `<li>${this.renderMarkdownInline(line)}</li>`)
-                        .join('');
-                    return `<ul class="list-disc pl-5 space-y-1">${items}</ul>`;
-                }
-
-                const allOrdered = listLines.every((line) => /^\s*\d+\.\s+/.test(line));
-                if (allOrdered) {
-                    const items = listLines
-                        .map((line) => line.replace(/^\s*\d+\.\s+/, '').trim())
-                        .map((line) => `<li>${this.renderMarkdownInline(line)}</li>`)
-                        .join('');
-                    return `<ol class="list-decimal pl-5 space-y-1">${items}</ol>`;
-                }
-
-                return `<p>${this.renderMarkdownInline(trimmed).replace(/\n/g, '<br>')}</p>`;
-            });
-
-            return htmlBlocks.join('');
+            const parsed = typeof markedLib.parse === 'function' ? markedLib.parse(source) : markedLib(source);
+            return purifier.sanitize(parsed, { USE_PROFILES: { html: true } });
         },
 
         renderMarkdownInline(text) {
