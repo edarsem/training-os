@@ -185,7 +185,7 @@
                 <input type="checkbox" :checked="saveChatHistory" @change="setSaveChatHistory($event.target.checked)">
                 Save to history
             </label>
-            <div class="border border-gray-200 rounded-md p-3 bg-gray-50 h-72 overflow-y-auto space-y-3">
+            <div class="border border-gray-200 rounded-md p-3 bg-gray-50 h-96 overflow-y-auto space-y-3 resize-y" style="min-height: 16rem; max-height: 75vh;">
                 <template x-for="(message, idx) in chatMessages" :key="idx">
                     <div :class="message.role === 'user' ? 'flex justify-end' : 'flex justify-start'">
                         <div :class="message.role === 'user'
@@ -221,8 +221,8 @@
                     @keydown="handleChatInputKeydown($event)"
                     :disabled="isChatLoading"
                     placeholder="Ask the coach about your training..."
-                    rows="2"
-                    class="flex-1 rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm border p-2 resize-y"
+                    rows="3"
+                    class="flex-1 rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm border p-2 resize-y min-h-[90px]"
                 ></textarea>
                 <button type="submit" :disabled="isChatLoading || !chatInput.trim()" class="bg-blue-600 text-white py-2 px-4 rounded hover:bg-blue-700 text-sm font-medium disabled:opacity-50">
                     <span x-text="isChatLoading ? 'Sending…' : 'Send'"></span>
@@ -246,7 +246,26 @@
                     </div>
                     <div>
                         <p class="font-semibold text-gray-700 mb-1">Last MCP Trace</p>
-                        <pre class="bg-white border border-gray-200 rounded p-2 overflow-x-auto whitespace-pre-wrap" x-text="formatDebugJson(chatDebug.lastMcpTrace)"></pre>
+                        <div class="bg-white border border-gray-200 rounded p-2 space-y-2" x-show="getMcpTraceEntries().length > 0">
+                            <template x-for="(entry, idx) in getMcpTraceEntries()" :key="idx">
+                                <div class="border border-gray-100 rounded p-2">
+                                    <div class="text-[11px] text-gray-500 mb-1" x-text="`#${idx + 1} ${entry.type || 'step'}${entry.name ? ' · ' + entry.name : ''}`"></div>
+                                    <div x-show="entry.arguments" class="mb-1">
+                                        <p class="font-medium text-gray-600 mb-1">Args</p>
+                                        <pre class="bg-gray-50 border border-gray-100 rounded p-2 overflow-x-auto whitespace-pre-wrap" x-text="formatDebugJson(entry.arguments)"></pre>
+                                    </div>
+                                    <div x-show="entry.result_preview !== undefined && entry.result_preview !== null" class="mb-1">
+                                        <p class="font-medium text-gray-600 mb-1">Result</p>
+                                        <pre class="bg-gray-50 border border-gray-100 rounded p-2 overflow-x-auto whitespace-pre-wrap" x-text="renderMcpTracePreview(entry.result_preview)"></pre>
+                                    </div>
+                                    <div x-show="entry.content" class="mb-1">
+                                        <p class="font-medium text-gray-600 mb-1">Content</p>
+                                        <pre class="bg-gray-50 border border-gray-100 rounded p-2 overflow-x-auto whitespace-pre-wrap" x-text="entry.content"></pre>
+                                    </div>
+                                </div>
+                            </template>
+                        </div>
+                        <pre x-show="getMcpTraceEntries().length === 0" class="bg-white border border-gray-200 rounded p-2 overflow-x-auto whitespace-pre-wrap" x-text="''"></pre>
                     </div>
                     <div>
                         <p class="font-semibold text-gray-700 mb-1">Last Audit</p>

@@ -161,24 +161,6 @@ document.addEventListener('alpine:init', () => {
             localStorage.setItem('training_os_chat_model', modelName);
         },
 
-        getEffectiveChatModel() {
-            const selected = String(this.selectedChatModel || '').trim();
-            if (this.chatModelOptions.includes(selected)) {
-                return selected;
-            }
-
-            const stored = localStorage.getItem('training_os_chat_model');
-            if (stored && this.chatModelOptions.includes(stored)) {
-                this.selectedChatModel = stored;
-                return stored;
-            }
-
-            const fallback = this.chatModelOptions[0];
-            this.selectedChatModel = fallback;
-            localStorage.setItem('training_os_chat_model', fallback);
-            return fallback;
-        },
-
         handleChatInputKeydown(event) {
             if (!event || event.isComposing) return;
             if (event.key !== 'Enter') return;
@@ -677,7 +659,10 @@ document.addEventListener('alpine:init', () => {
                     await this.persistChatMessage('user', composedText);
                 }
 
-                    const effectiveModel = this.getEffectiveChatModel();
+                    const selectedModel = String(this.selectedChatModel || '').trim();
+                    const effectiveModel = this.chatModelOptions.includes(selectedModel)
+                        ? selectedModel
+                        : this.chatModelOptions[0];
                     this.setChatModel(effectiveModel);
 
                     const payload = {
@@ -729,6 +714,18 @@ document.addEventListener('alpine:init', () => {
             } catch {
                 return String(value);
             }
+        },
+
+        getMcpTraceEntries() {
+            const trace = this.chatDebug?.lastMcpTrace;
+            return Array.isArray(trace) ? trace : [];
+        },
+
+        renderMcpTracePreview(value) {
+            if (value === null || value === undefined) return '';
+            if (typeof value === 'string') return value;
+            if (typeof value === 'object' && typeof value.text === 'string') return value.text;
+            return this.formatDebugJson(value);
         },
 
         renderCoachMarkdown(text) {

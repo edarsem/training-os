@@ -33,6 +33,161 @@ def _safe_per_7_days(total: float, number_of_days: int) -> float:
     return round((float(total) * 7.0) / float(number_of_days), 2)
 
 
+def _format_duration_hours(total_minutes: int) -> str:
+    minutes = int(total_minutes or 0)
+    hours = minutes // 60
+    rem = minutes % 60
+    if rem == 0:
+        return f"{hours}h"
+    return f"{hours}h{str(rem).zfill(2)}"
+
+
+def _day_label(value: date) -> str:
+    weekdays = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
+    return weekdays[value.weekday()]
+
+
+def _ordinal_day(value: date) -> str:
+    day_num = value.day
+    if 10 <= day_num % 100 <= 20:
+        suffix = "th"
+    else:
+        suffix = {1: "st", 2: "nd", 3: "rd"}.get(day_num % 10, "th")
+    return f"{day_num}{suffix}"
+
+
+def _render_week_summary_text(payload: dict[str, Any]) -> str:
+    totals = payload.get("totals", {})
+    lines = [
+        f"{payload.get('date_start')} to {payload.get('date_end')} week summary:",
+        (
+            f"{totals.get('total_sessions', 0)} sessions, "
+            f"{_format_duration_hours(int(totals.get('total_duration_minutes') or 0))}, "
+            f"{totals.get('total_distance_km', 0)} km and {totals.get('total_elevation_gain_m', 0)} m+"
+        ),
+    ]
+
+    plan = payload.get("plan") or {}
+    lines.append(f"Week plan: {plan.get('description') or 'None'}")
+
+    day_notes = payload.get("day_notes") or []
+    if day_notes:
+        lines.append("Day notes:")
+        for note in day_notes:
+            lines.append(f"- {note.get('date')}: {note.get('note') or ''}")
+
+    sessions = payload.get("sessions") or []
+    if sessions:
+        lines.append("Main sessions:")
+        for item in sessions:
+            session_date = date.fromisoformat(str(item.get("date")))
+            distance = item.get("distance_km")
+            elev = item.get("elevation_gain_m")
+            base = (
+                f"{_day_label(session_date)} the {_ordinal_day(session_date)}, "
+                f"{_format_duration_hours(int(item.get('moving_duration_minutes') or item.get('duration_minutes') or 0))} {item.get('type')}"
+            )
+            if distance:
+                base += f", {distance} km"
+            if elev:
+                base += f", {elev} m+"
+            lines.append(base)
+            if item.get("notes"):
+                lines.append(f"note: {item.get('notes')}")
+
+    return "\n".join(lines)
+
+
+def _render_day_details_text(payload: dict[str, Any]) -> str:
+    totals = payload.get("totals", {})
+    lines = [
+        f"{payload.get('date')} day details:",
+        (
+            f"{totals.get('total_sessions', 0)} sessions, "
+            f"{_format_duration_hours(int(totals.get('total_duration_minutes') or 0))} total "
+            f"({_format_duration_hours(int(totals.get('total_moving_minutes') or 0))} moving), "
+            f"{totals.get('total_distance_km', 0)} km, {totals.get('total_elevation_gain_m', 0)} m+"
+        ),
+    ]
+    day_note = payload.get("day_note")
+    if day_note:
+        lines.append(f"Day note: {day_note}")
+
+    sessions = payload.get("sessions") or []
+    if sessions:
+        lines.append("Sessions:")
+        for item in sessions:
+            base = f"- {item.get('type')} #{item.get('id')}: {_format_duration_hours(int(item.get('moving_duration_minutes') or item.get('duration_minutes') or 0))}"
+            if item.get("distance_km"):
+                base += f", {item.get('distance_km')} km"
+            if item.get("elevation_gain_m"):
+                base += f", {item.get('elevation_gain_m')} m+"
+            lines.append(base)
+            if item.get("notes"):
+                lines.append(f"  note: {item.get('notes')}")
+
+    return "\n".join(lines)
+
+
+def _render_session_details_text(payload: dict[str, Any]) -> str:
+    if payload.get("error"):
+        return f"Session {payload.get('session_id')} not found."
+
+    lines = [
+        f"Session #{payload.get('id')} ({payload.get('type')}) on {payload.get('date')}",
+        f"Moving: {_format_duration_hours(int(payload.get('moving_duration_minutes') or payload.get('duration_minutes') or 0))}",
+        f"Elapsed: {_format_duration_hours(int(payload.get('elapsed_duration_minutes') or payload.get('duration_minutes') or 0))}",
+    ]
+    if payload.get("distance_km"):
+        lines.append(f"Distance: {payload.get('distance_km')} km")
+    if payload.get("elevation_gain_m"):
+        lines.append(f"Elevation: {payload.get('elevation_gain_m')} m+")
+    if payload.get("average_pace_min_per_km"):
+        lines.append(f"Avg pace: {payload.get('average_pace_min_per_km')} min/km")
+    if payload.get("average_heart_rate_bpm"):
+        hr = f"{payload.get('average_heart_rate_bpm')}"
+        if payload.get("max_heart_rate_bpm"):
+            hr += f"/{payload.get('max_heart_rate_bpm')}"
+        lines.append(f"HR avg/max: {hr}")
+    if payload.get("perceived_intensity"):
+        lines.append(f"Intensity: {payload.get('perceived_intensity')}/10")
+    if payload.get("notes"):
+        lines.append(f"Notes: {payload.get('notes')}")
+    return "\n".join(lines)
+
+
+def _render_block_summary_text(payload: dict[str, Any]) -> str:
+    totals = payload.get("totals", {})
+    normalized = payload.get("normalized_per_7_days", {})
+    lines = [
+        f"Block summary {payload.get('date_start')} to {payload.get('date_end')}:",
+        (
+            f"{payload.get('total_sessions', 0)} sessions over {payload.get('number_of_days', 0)} days "
+            f"({payload.get('active_training_days', 0)} active days)."
+        ),
+        (
+            f"Totals: run {totals.get('run_distance_km', 0)} km, bike {totals.get('bike_distance_km', 0)} km, "
+            f"elevation {totals.get('elevation_gain_m', 0)} m+, "
+            f"strength {_format_duration_hours(int(totals.get('strength_time_minutes') or 0))}, "
+            f"time {_format_duration_hours(int(totals.get('total_time_minutes') or 0))}."
+        ),
+        (
+            f"Normalized per 7 days: run {normalized.get('run_distance_km', 0)} km, bike {normalized.get('bike_distance_km', 0)} km, "
+            f"elevation {normalized.get('elevation_gain_m', 0)} m+, strength {normalized.get('strength_time_minutes', 0)} min, "
+            f"time {normalized.get('total_time_minutes', 0)} min."
+        ),
+    ]
+
+    longest = payload.get("longest_run_or_trail")
+    if longest:
+        lines.append(
+            f"Longest run/trail: {longest.get('type')} on {longest.get('date')}, "
+            f"{longest.get('distance_km') or 0} km, {_format_duration_hours(int(longest.get('moving_duration_minutes') or longest.get('duration_minutes') or 0))}."
+        )
+
+    return "\n".join(lines)
+
+
 def _resolve_temporal_reference_common(
     *,
     temporal_ref: str,
@@ -42,6 +197,13 @@ def _resolve_temporal_reference_common(
 ) -> dict[str, Any]:
     resolved = resolver(temporal_ref, now_iso_date, language)
     mode = str(resolved.get("mode") or "date").strip().lower()
+
+    if mode not in {"date", "range"}:
+        return {
+            "mode": "unresolved",
+            "label": resolved.get("label") or temporal_ref,
+            "error": resolved.get("error") or "unable_to_resolve_time_reference",
+        }
 
     if mode == "range":
         start_iso = str(resolved.get("range_start_iso") or now_iso_date)
@@ -64,11 +226,21 @@ def _resolve_temporal_reference_common(
             "label": resolved.get("label") or temporal_ref,
         }
 
-    reference_iso = str(resolved.get("reference_date_iso") or now_iso_date)
+    reference_iso = str(resolved.get("reference_date_iso") or "")
+    if not reference_iso:
+        return {
+            "mode": "unresolved",
+            "label": resolved.get("label") or temporal_ref,
+            "error": "missing_reference_date_iso",
+        }
     try:
         reference_date = date.fromisoformat(reference_iso)
     except ValueError:
-        reference_date = date.fromisoformat(now_iso_date)
+        return {
+            "mode": "unresolved",
+            "label": resolved.get("label") or temporal_ref,
+            "error": "invalid_reference_date_iso",
+        }
 
     return {
         "mode": "date",
@@ -79,13 +251,13 @@ def _resolve_temporal_reference_common(
 
 def resolve_time_reference_tool(
     *,
-    query: str,
+    temporal_ref: str,
     now_iso_date: str,
     resolver: Callable[[str, str, str | None], dict[str, Any]],
     language: str | None = None,
 ) -> dict[str, Any]:
     return _resolve_temporal_reference_common(
-        temporal_ref=query,
+        temporal_ref=temporal_ref,
         now_iso_date=now_iso_date,
         resolver=resolver,
         language=language,
@@ -116,6 +288,12 @@ def _resolve_day_date_iso(
             resolver=resolver,
             language=language,
         )
+
+        if resolved.get("mode") == "unresolved":
+            return "", {
+                "temporal_ref": temporal_ref,
+                "resolved": resolved,
+            }
 
         if resolved.get("mode") == "range":
             reference = str(resolved.get("range_start_iso"))
@@ -159,6 +337,12 @@ def _resolve_block_range_iso(
             language=language,
         )
 
+        if resolved.get("mode") == "unresolved":
+            return "", "", {
+                "temporal_ref": temporal_ref,
+                "resolved": resolved,
+            }
+
         if resolved.get("mode") == "range":
             start_date = date.fromisoformat(str(resolved.get("range_start_iso")))
             end_date = date.fromisoformat(str(resolved.get("range_end_iso")))
@@ -183,6 +367,7 @@ def get_week_summary_tool(
     date_iso: str,
     include_sessions: bool = False,
     temporal_resolution: dict[str, Any] | None = None,
+    output_mode: str = "text",
 ) -> dict[str, Any]:
     reference_date = date.fromisoformat(date_iso)
     anchor_year, anchor_week = _iso_anchor_from_date(reference_date)
@@ -196,8 +381,6 @@ def get_week_summary_tool(
     total_elevation = int(sum((s.elevation_gain_m or 0) for s in sessions if s.type in ["run", "trail", "hike"]))
 
     payload: dict[str, Any] = {
-        "year": anchor_year,
-        "week_number": anchor_week,
         "date_start": start_date.isoformat(),
         "date_end": end_date.isoformat(),
         "totals": {
@@ -238,7 +421,10 @@ def get_week_summary_tool(
     if temporal_resolution:
         payload["temporal_resolution"] = temporal_resolution
 
-    return payload
+    if output_mode == "json":
+        return payload
+
+    return {"text": _render_week_summary_text(payload)}
 
 
 def get_day_details_tool(
@@ -247,6 +433,7 @@ def get_day_details_tool(
     date_iso: str,
     truncate_notes_chars: int = 220,
     temporal_resolution: dict[str, Any] | None = None,
+    output_mode: str = "text",
 ) -> dict[str, Any]:
     target_date = date.fromisoformat(date_iso)
     sessions = crud.get_sessions_by_date_range(db, target_date, target_date)
@@ -283,13 +470,17 @@ def get_day_details_tool(
     if temporal_resolution:
         payload["temporal_resolution"] = temporal_resolution
 
-    return payload
+    if output_mode == "json":
+        return payload
+
+    return {"text": _render_day_details_text(payload)}
 
 
 def get_session_details_tool(
     db: DBSession,
     *,
     session_id: int,
+    output_mode: str = "text",
 ) -> dict[str, Any]:
     session = crud.get_session_by_id(db, int(session_id))
     if not session:
@@ -298,7 +489,7 @@ def get_session_details_tool(
             "session_id": int(session_id),
         }
 
-    return {
+    payload = {
         "id": session.id,
         "external_id": session.external_id,
         "date": session.date.isoformat(),
@@ -316,6 +507,11 @@ def get_session_details_tool(
         "notes": session.notes,
     }
 
+    if output_mode == "json":
+        return payload
+
+    return {"text": _render_session_details_text(payload)}
+
 
 def get_block_summary_tool(
     db: DBSession,
@@ -323,6 +519,7 @@ def get_block_summary_tool(
     start_iso: str,
     end_iso: str,
     temporal_resolution: dict[str, Any] | None = None,
+    output_mode: str = "text",
 ) -> dict[str, Any]:
     start_date = date.fromisoformat(start_iso)
     end_date = date.fromisoformat(end_iso)
@@ -386,7 +583,10 @@ def get_block_summary_tool(
     if temporal_resolution:
         payload["temporal_resolution"] = temporal_resolution
 
-    return payload
+    if output_mode == "json":
+        return payload
+
+    return {"text": _render_block_summary_text(payload)}
 
 
 def get_mcp_tools_schema() -> list[dict[str, Any]]:
@@ -394,25 +594,8 @@ def get_mcp_tools_schema() -> list[dict[str, Any]]:
         {
             "type": "function",
             "function": {
-                "name": "resolve_time_reference",
-                "description": "Resolve natural language time references into either a single date or an explicit date range. Use it to resolve ambiguous or relative temporal expressions (e.g., 'last monday', 'next week', 'month of janvier') into explicit ISO date values. When the reference implies a period longer than a week or is ambiguous, return a range. Always return a label that can be used to refer to the resolved time in the final answer.",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "query": {"type": "string"},
-                        "now_iso_date": {"type": "string"},
-                        "language": {"type": "string"},
-                    },
-                    "required": ["query", "now_iso_date"],
-                    "additionalProperties": False,
-                },
-            },
-        },
-        {
-            "type": "function",
-            "function": {
                 "name": "get_week_summary",
-                "description": "Get summary metrics, plan and notes for the ISO week that contains a date. Use date_iso when possible with any day of this week; otherwise provide temporal_ref with now_iso_date.",
+                "description": "Get an overview of one week. Aggregated metrics, plan and notes (sessions can also be included) for the week containing a given date. Use date_iso when possible with any day of this week; otherwise provide temporal_ref with now_iso_date.",
                 "parameters": {
                     "type": "object",
                     "properties": {
@@ -465,7 +648,7 @@ def get_mcp_tools_schema() -> list[dict[str, Any]]:
             "type": "function",
             "function": {
                 "name": "get_block_summary",
-                "description": "Get aggregated metrics for a date range (multi-week block), including normalized metrics per 7 days for block comparison. Use start_iso/end_iso when explicit; otherwise temporal_ref + now_iso_date.",
+                "description": "Get aggregated metrics for a date range (multi-week to months block), including normalized metrics per 7 days for block comparison. Use start_iso/end_iso when explicit; otherwise temporal_ref + now_iso_date.",
                 "parameters": {
                     "type": "object",
                     "properties": {
@@ -484,13 +667,11 @@ def get_mcp_tools_schema() -> list[dict[str, Any]]:
             "type": "function",
             "function": {
                 "name": "submit_final_answer",
-                "description": "Submit the final user-facing answer once tool usage is complete.",
+                "description": "Signal that tool usage is complete and the orchestrator should run final answer synthesis.",
                 "parameters": {
                     "type": "object",
-                    "properties": {
-                        "answer": {"type": "string"},
-                    },
-                    "required": ["answer"],
+                    "properties": {},
+                    "required": [],
                     "additionalProperties": False,
                 },
             },
@@ -508,8 +689,15 @@ def execute_mcp_tool(
     if name == "resolve_time_reference":
         if time_resolver is None:
             raise ValueError("resolve_time_reference requires a time_resolver")
+        temporal_ref = str(arguments.get("temporal_ref") or arguments.get("query") or "").strip()
+        if not temporal_ref:
+            return {
+                "mode": "unresolved",
+                "error": "missing_temporal_ref",
+                "label": "",
+            }
         return resolve_time_reference_tool(
-            query=str(arguments.get("query") or ""),
+            temporal_ref=temporal_ref,
             now_iso_date=str(arguments.get("now_iso_date") or date.today().isoformat()),
             language=arguments.get("language"),
             resolver=time_resolver,
@@ -523,12 +711,18 @@ def execute_mcp_tool(
             language=arguments.get("language"),
             resolver=time_resolver,
         )
+        if temporal_resolution and temporal_resolution.get("resolved", {}).get("mode") == "unresolved":
+            return {
+                "error": "temporal_reference_unresolved",
+                "temporal_resolution": temporal_resolution,
+            }
         include_sessions = bool(arguments.get("include_sessions", False))
         return get_week_summary_tool(
             db,
             date_iso=date_iso,
             include_sessions=include_sessions,
             temporal_resolution=temporal_resolution,
+            output_mode="text",
         )
 
     if name == "get_day_details":
@@ -539,12 +733,18 @@ def execute_mcp_tool(
             language=arguments.get("language"),
             resolver=time_resolver,
         )
+        if temporal_resolution and temporal_resolution.get("resolved", {}).get("mode") == "unresolved":
+            return {
+                "error": "temporal_reference_unresolved",
+                "temporal_resolution": temporal_resolution,
+            }
         truncate_notes_chars = int(arguments.get("truncate_notes_chars", 220))
         return get_day_details_tool(
             db,
             date_iso=date_iso,
             truncate_notes_chars=truncate_notes_chars,
             temporal_resolution=temporal_resolution,
+            output_mode="text",
         )
 
     if name == "get_session_details":
@@ -552,6 +752,7 @@ def execute_mcp_tool(
         return get_session_details_tool(
             db,
             session_id=session_id,
+            output_mode="text",
         )
 
     if name == "get_block_summary":
@@ -563,16 +764,21 @@ def execute_mcp_tool(
             language=arguments.get("language"),
             resolver=time_resolver,
         )
+        if temporal_resolution and temporal_resolution.get("resolved", {}).get("mode") == "unresolved":
+            return {
+                "error": "temporal_reference_unresolved",
+                "temporal_resolution": temporal_resolution,
+            }
         return get_block_summary_tool(
             db,
             start_iso=start_iso,
             end_iso=end_iso,
             temporal_resolution=temporal_resolution,
+            output_mode="text",
         )
 
     if name == "submit_final_answer":
         return {
-            "final_answer": str(arguments.get("answer") or "").strip(),
             "status": "ok",
         }
 

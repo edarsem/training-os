@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 import json
-from datetime import datetime, timezone
+import re
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from sqlalchemy.orm import Session as DBSession
@@ -206,14 +207,13 @@ class TrainingOSLLMService:
             "question": request.query,
             "now_iso_date": now_iso,
             "locale": language,
-            "fallback_anchor_year": request.anchor_year,
-            "fallback_anchor_week": request.anchor_week,
             "instruction": (
                 "Use tools to fetch only the minimum data required to answer accurately. "
                 "Prefer calling data tools directly with explicit ISO dates/ranges whenever you can infer them from the user query. "
                 "Use temporal_ref only when ISO values are not explicit or are relative/ambiguous (e.g., last monday, last month). "
-                "Requesting on a narrow level (session, day) gives more granular data, requeting on a broad level (week, block) gives aggregated data. "
-                "When ready to respond to the user, call submit_final_answer with the full final answer text."
+                "If you call resolve_time_reference, pass only the unresolved time expression in temporal_ref (example: 'la semaine dernière'), never the full user question. "
+                "Requesting on a narrow level (session, day) gives more granular data, requesting on a broad level (week, block) gives aggregated data. "
+                "When done with tool calls, call submit_final_answer with no arguments."
             ),
         }
         user_message_content = json.dumps(user_payload, ensure_ascii=False)
@@ -236,6 +236,7 @@ class TrainingOSLLMService:
         mcp_trace: list[dict[str, Any]] = []
         usage_aggregate: dict[str, Any] = {}
         answer = ""
+        submit_final_answer_called = False
         max_calls = int(settings.LLM_MCP_MAX_TOOL_CALLS)
 
         for _ in range(max_calls + 1):
@@ -297,7 +298,7 @@ class TrainingOSLLMService:
                     )
 
                     if name == "submit_final_answer":
-                        answer = str(tool_result.get("final_answer") or "").strip()
+                        submit_final_answer_called = True
                         mcp_trace.append(
                             {
                                 "type": "tool_call",
@@ -321,7 +322,11 @@ class TrainingOSLLMService:
                             "type": "tool_call",
                             "name": name,
                             "arguments": arguments,
-                            "result_preview": tool_result,
+                            "result_preview": (
+                                tool_result.get("text")
+                                if isinstance(tool_result, dict) and isinstance(tool_result.get("text"), str)
+                                else tool_result
+                            ),
                         }
                     )
 
@@ -334,8 +339,7 @@ class TrainingOSLLMService:
                         }
                     )
 
-                if answer:
-                    mcp_trace.append({"type": "final_answer", "content": answer})
+                if submit_final_answer_called:
                     break
 
                 continue
@@ -351,13 +355,49 @@ class TrainingOSLLMService:
                 messages.append(
                     {
                         "role": "user",
-                        "content": "Finalize now by calling submit_final_answer with the response for the user.",
+                        "content": "Finalize now by calling submit_final_answer with no arguments.",
                     }
                 )
                 continue
 
+        if submit_final_answer_called:
+            synthesis_payload = {
+                "question": request.query,
+                "now_iso_date": now_iso,
+                "language": language,
+                "tool_results": [entry for entry in mcp_trace if entry.get("type") == "tool_call" and entry.get("name") != "submit_final_answer"],
+                "instruction": (
+                    "Write the final answer for the user using only these tool results. "
+                    "Do not invent data. If a needed value is missing, say it clearly."
+                ),
+            }
+            synthesis_messages = [
+                {
+                    "role": "system",
+                    "content": system_prompt,
+                },
+                {
+                    "role": "user",
+                    "content": json.dumps(synthesis_payload, ensure_ascii=False),
+                },
+            ]
+
+            answer, usage = provider.complete(
+                messages=synthesis_messages,
+                model=model_name,
+                temperature=temperature,
+                max_tokens=settings.LLM_MAX_TOKENS,
+            )
+            if isinstance(usage, dict):
+                for key, value in usage.items():
+                    if isinstance(value, (int, float)):
+                        usage_aggregate[key] = usage_aggregate.get(key, 0) + value
+
+            answer = str(answer or "").strip()
+            mcp_trace.append({"type": "final_answer", "content": answer})
+
         if not answer:
-            answer = "I could not complete the MCP tool workflow for this request with submit_final_answer."
+            answer = "I could not complete the MCP tool workflow for this request."
 
         context_payload = {
             "mcp_trace": mcp_trace,
@@ -404,22 +444,106 @@ class TrainingOSLLMService:
         now_iso_date: str,
         language: str,
     ) -> dict[str, Any]:
+        now_date = datetime.fromisoformat(now_iso_date).date()
+        normalized = str(query or "").strip().lower()
+
+        if normalized in {"la semaine dernière", "semaine dernière", "semaine derniere", "last week"}:
+            this_week_monday = now_date - timedelta(days=now_date.weekday())
+            last_week_monday = this_week_monday - timedelta(days=7)
+            last_week_sunday = last_week_monday + timedelta(days=6)
+            return {
+                "mode": "range",
+                "range_start_iso": last_week_monday.isoformat(),
+                "range_end_iso": last_week_sunday.isoformat(),
+                "label": query,
+                "resolution_source": "deterministic",
+            }
+
+        month_map = {
+            "janvier": 1,
+            "février": 2,
+            "fevrier": 2,
+            "mars": 3,
+            "avril": 4,
+            "mai": 5,
+            "juin": 6,
+            "juillet": 7,
+            "août": 8,
+            "aout": 8,
+            "septembre": 9,
+            "octobre": 10,
+            "novembre": 11,
+            "décembre": 12,
+            "decembre": 12,
+            "january": 1,
+            "february": 2,
+            "march": 3,
+            "april": 4,
+            "may": 5,
+            "june": 6,
+            "july": 7,
+            "august": 8,
+            "september": 9,
+            "october": 10,
+            "november": 11,
+            "december": 12,
+        }
+        for month_label, month_num in month_map.items():
+            if re.search(rf"\b{re.escape(month_label)}\b", normalized):
+                year_match = re.search(r"\b(20\d{2})\b", normalized)
+                if year_match:
+                    year = int(year_match.group(1))
+                else:
+                    year = now_date.year
+                    if month_num > now_date.month:
+                        year -= 1
+
+                start_date = datetime(year, month_num, 1).date()
+                if month_num == 12:
+                    end_date = datetime(year + 1, 1, 1).date() - timedelta(days=1)
+                else:
+                    end_date = datetime(year, month_num + 1, 1).date() - timedelta(days=1)
+
+                return {
+                    "mode": "range",
+                    "range_start_iso": start_date.isoformat(),
+                    "range_end_iso": end_date.isoformat(),
+                    "label": query,
+                    "resolution_source": "deterministic",
+                }
+
+        current_week_start = now_date - timedelta(days=now_date.weekday())
+        week_starts = [
+            (current_week_start - timedelta(days=7 * offset)).isoformat()
+            for offset in range(12)
+        ]
+
         system_prompt = (
             "You resolve temporal expressions into either a single date or an explicit date range. "
-            "Return strict JSON only with keys: mode, reference_date_iso, range_start_iso, range_end_iso, label. "
-            "mode must be exactly one of: date, range. Give a range when the query implies a period longer than a week or when the reference is ambiguous. "
+            "Return strict JSON only with keys: mode, reference_date_iso, range_start_iso, range_end_iso, label, error. "
+            "mode must be exactly one of: date, range, unresolved. "
+            "Give a range when the query implies a period longer than one day. "
             "For mode=date, provide reference_date_iso (YYYY-MM-DD). "
-            "For mode=range, provide range_start_iso and range_end_iso (YYYY-MM-DD)."
+            "For mode=range, provide range_start_iso and range_end_iso (YYYY-MM-DD). "
+            "For mode=unresolved, provide error and label."
         )
         user_prompt = json.dumps(
             {
                 "query": query,
                 "now_iso_date": now_iso_date,
                 "language": language,
-                "calendar_hint": "Use ISO calendar logic when query refers to weeks.",
+                "calendar_context": {
+                    "today": now_iso_date,
+                    "today_weekday": now_date.strftime("%A"),
+                    "past_12_week_starts_monday": week_starts,
+                },
+                "rules": [
+                    "Do not default to today when you are uncertain.",
+                    "If the query contains an explicit month and year, return a range for that full month.",
+                    "If the query is relative (last week, last month), resolve relative to today.",
+                ],
             },
             ensure_ascii=False,
-            sort_keys=True,
         )
 
         text, _usage = provider.complete(
@@ -434,11 +558,24 @@ class TrainingOSLLMService:
 
         try:
             data = json.loads(text)
-            mode = str(data.get("mode") or "date").strip().lower()
+            mode = str(data.get("mode") or "unresolved").strip().lower()
+
+            if mode == "unresolved":
+                return {
+                    "mode": "unresolved",
+                    "label": data.get("label") or query,
+                    "error": data.get("error") or "unable_to_resolve_time_reference",
+                }
 
             if mode == "range":
-                start_iso = str(data.get("range_start_iso") or now_iso_date)
-                end_iso = str(data.get("range_end_iso") or start_iso)
+                start_iso = str(data.get("range_start_iso") or "")
+                end_iso = str(data.get("range_end_iso") or "")
+                if not start_iso or not end_iso:
+                    return {
+                        "mode": "unresolved",
+                        "label": data.get("label") or query,
+                        "error": "missing_range_dates",
+                    }
                 start_date = datetime.fromisoformat(start_iso).date()
                 end_date = datetime.fromisoformat(end_iso).date()
 
@@ -452,7 +589,13 @@ class TrainingOSLLMService:
                     "label": data.get("label") or query,
                 }
 
-            ref = str(data.get("reference_date_iso") or now_iso_date)
+            ref = str(data.get("reference_date_iso") or "")
+            if not ref:
+                return {
+                    "mode": "unresolved",
+                    "label": data.get("label") or query,
+                    "error": "missing_reference_date_iso",
+                }
             datetime.fromisoformat(ref)
             return {
                 "mode": "date",
@@ -461,9 +604,9 @@ class TrainingOSLLMService:
             }
         except Exception:
             return {
-                "mode": "date",
-                "reference_date_iso": now_iso_date,
+                "mode": "unresolved",
                 "label": query,
+                "error": "unable_to_resolve_time_reference",
             }
 
 
