@@ -33,4 +33,6 @@ class Settings(BaseSettings):
     LLM_MCP_ENABLED: bool = True
     LLM_MCP_MAX_TOOL_CALLS: int = 4
 
+    TRAINING_LOAD_THRESHOLD_HR_BPM: float | None = None
+
 settings = Settings()
