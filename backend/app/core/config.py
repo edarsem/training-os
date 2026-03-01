@@ -22,8 +22,8 @@ class Settings(BaseSettings):
     MISTRAL_API_KEY: str | None = None
     MISTRAL_API_BASE_URL: str = "https://api.mistral.ai/v1"
     MISTRAL_MODEL: str = "mistral-small-latest"
-    LLM_TIMEOUT_SECONDS: int = 45
-    LLM_MAX_TOKENS: int = 2000
+    LLM_TIMEOUT_SECONDS: int = 120
+    LLM_MAX_TOKENS: int = 3000
     LLM_TEMPERATURE: float = 0.5
     LLM_DEFAULT_LANGUAGE: str = "en"
     LLM_USER_LANGUAGE: str | None = None
@@ -31,7 +31,7 @@ class Settings(BaseSettings):
     LLM_PRIVATE_PROMPT_BASENAME: str | None = None
     LLM_PRIVATE_TEMPLATE_BASENAME: str = "profile"
     LLM_MCP_ENABLED: bool = True
-    LLM_MCP_MAX_TOOL_CALLS: int = 4
+    LLM_MCP_MAX_TOOL_CALLS: int = 6
 
     TRAINING_LOAD_THRESHOLD_HR_BPM: float | None = None
 
