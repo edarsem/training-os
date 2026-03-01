@@ -56,6 +56,10 @@ def _ordinal_day(value: date) -> str:
     return f"{day_num}{suffix}"
 
 
+def _month_day_label(value: date) -> str:
+    return f"{value.strftime('%B')} {_ordinal_day(value)}"
+
+
 def _render_week_summary_text(payload: dict[str, Any]) -> str:
     totals = payload.get("totals", {})
     lines = [
@@ -185,6 +189,46 @@ def _render_block_summary_text(payload: dict[str, Any]) -> str:
             f"{longest.get('distance_km') or 0} km, {_format_duration_hours(int(longest.get('moving_duration_minutes') or longest.get('duration_minutes') or 0))}."
         )
 
+    weekly_breakdown = payload.get("weekly_breakdown") or []
+    if weekly_breakdown:
+        lines.append("Weekly trend:")
+        for item in weekly_breakdown:
+            line = (
+                f"- Week of {item.get('week_start')}: run/trail {item.get('run_trail_distance_km', 0)} km, "
+                f"{item.get('run_trail_elevation_gain_m', 0)} m+, {item.get('total_sessions', 0)} sessions"
+            )
+            longest_week = item.get("longest_run_or_trail")
+            if longest_week:
+                line += (
+                    f". Longest on {longest_week.get('weekday')}: {longest_week.get('distance_km') or 0} km, "
+                    f"{longest_week.get('elevation_gain_m') or 0} m+ in "
+                    f"{_format_duration_hours(int(longest_week.get('moving_duration_minutes') or longest_week.get('duration_minutes') or 0))} "
+                    f"[session #{longest_week.get('session_id')}]"
+                )
+            lines.append(line)
+
+    return "\n".join(lines)
+
+
+def _render_recent_weeks_summary_text(payload: dict[str, Any]) -> str:
+    now_iso = payload.get("now_iso_date")
+    weeks = payload.get("weeks") or []
+    lines = [f"Recent {len(weeks)} weeks summary (anchor: {now_iso}):"]
+    for item in weeks:
+        line = (
+            f"Week of {_month_day_label(date.fromisoformat(str(item.get('week_start'))))}: "
+            f"{item.get('run_trail_distance_km', 0)} km, {item.get('run_trail_elevation_gain_m', 0)} m+ "
+            f"in {item.get('total_sessions', 0)} sessions ({_format_duration_hours(int(item.get('total_duration_minutes') or 0))})."
+        )
+        longest = item.get("longest_run_or_trail")
+        if longest:
+            line += (
+                f" Longest on {longest.get('weekday')}, {longest.get('distance_km') or 0} km, "
+                f"{longest.get('elevation_gain_m') or 0} m+ in "
+                f"{_format_duration_hours(int(longest.get('moving_duration_minutes') or longest.get('duration_minutes') or 0))} "
+                f"[session #{longest.get('session_id')}]"
+            )
+        lines.append(line)
     return "\n".join(lines)
 
 
@@ -556,6 +600,42 @@ def get_block_summary_tool(
             "elevation_gain_m": best.elevation_gain_m,
         }
 
+    first_week_start = start_date - timedelta(days=start_date.weekday())
+    last_week_start = end_date - timedelta(days=end_date.weekday())
+    weekly_breakdown: list[dict[str, Any]] = []
+    cursor = first_week_start
+    while cursor <= last_week_start:
+        window_start = max(cursor, start_date)
+        window_end = min(cursor + timedelta(days=6), end_date)
+        week_sessions = [s for s in sessions if window_start <= s.date <= window_end]
+        week_run_trail = [s for s in week_sessions if s.type in ["run", "trail"]]
+
+        week_longest: dict[str, Any] | None = None
+        if week_run_trail:
+            best_week = max(week_run_trail, key=lambda s: (s.distance_km or 0.0, s.duration_minutes or 0, s.id or 0))
+            week_longest = {
+                "session_id": best_week.id,
+                "date": best_week.date.isoformat(),
+                "weekday": _day_label(best_week.date),
+                "type": best_week.type,
+                "distance_km": best_week.distance_km,
+                "duration_minutes": best_week.duration_minutes,
+                "moving_duration_minutes": best_week.moving_duration_minutes,
+                "elevation_gain_m": best_week.elevation_gain_m,
+            }
+
+        weekly_breakdown.append(
+            {
+                "week_start": cursor.isoformat(),
+                "week_end": (cursor + timedelta(days=6)).isoformat(),
+                "total_sessions": len(week_sessions),
+                "run_trail_distance_km": round(sum((s.distance_km or 0.0) for s in week_run_trail), 2),
+                "run_trail_elevation_gain_m": int(sum((s.elevation_gain_m or 0) for s in week_run_trail)),
+                "longest_run_or_trail": week_longest,
+            }
+        )
+        cursor = cursor + timedelta(days=7)
+
     payload = {
         "date_start": start_date.isoformat(),
         "date_end": end_date.isoformat(),
@@ -564,6 +644,7 @@ def get_block_summary_tool(
         "days_with_notes": noted_days,
         "total_sessions": len(sessions),
         "longest_run_or_trail": longest_run_or_trail,
+        "weekly_breakdown": weekly_breakdown,
         "totals": {
             "run_distance_km": total_run_distance_km,
             "bike_distance_km": total_bike_distance_km,
@@ -587,6 +668,64 @@ def get_block_summary_tool(
         return payload
 
     return {"text": _render_block_summary_text(payload)}
+
+
+def get_recent_weeks_summary_tool(
+    db: DBSession,
+    *,
+    weeks_count: int = 4,
+    now_iso_date: str | None = None,
+    output_mode: str = "text",
+) -> dict[str, Any]:
+    count = max(1, min(int(weeks_count), 24))
+    now_date = date.fromisoformat(now_iso_date) if now_iso_date else date.today()
+    current_week_start = now_date - timedelta(days=now_date.weekday())
+
+    weeks: list[dict[str, Any]] = []
+    for offset in range(count):
+        week_start = current_week_start - timedelta(days=7 * offset)
+        week_end = week_start + timedelta(days=6)
+        effective_end = min(week_end, now_date)
+        week_sessions = crud.get_sessions_by_date_range(db, week_start, effective_end)
+        run_trail = [s for s in week_sessions if s.type in ["run", "trail"]]
+
+        longest: dict[str, Any] | None = None
+        if run_trail:
+            best = max(run_trail, key=lambda s: (s.distance_km or 0.0, s.duration_minutes or 0, s.id or 0))
+            longest = {
+                "session_id": best.id,
+                "date": best.date.isoformat(),
+                "weekday": _day_label(best.date),
+                "type": best.type,
+                "distance_km": best.distance_km,
+                "elevation_gain_m": best.elevation_gain_m,
+                "duration_minutes": best.duration_minutes,
+                "moving_duration_minutes": best.moving_duration_minutes,
+            }
+
+        weeks.append(
+            {
+                "week_start": week_start.isoformat(),
+                "week_end": week_end.isoformat(),
+                "effective_end": effective_end.isoformat(),
+                "total_sessions": len(week_sessions),
+                "total_duration_minutes": int(sum((s.duration_minutes or 0) for s in week_sessions)),
+                "run_trail_distance_km": round(sum((s.distance_km or 0.0) for s in run_trail), 2),
+                "run_trail_elevation_gain_m": int(sum((s.elevation_gain_m or 0) for s in run_trail)),
+                "longest_run_or_trail": longest,
+            }
+        )
+
+    payload = {
+        "now_iso_date": now_date.isoformat(),
+        "weeks_count": count,
+        "weeks": weeks,
+    }
+
+    if output_mode == "json":
+        return payload
+
+    return {"text": _render_recent_weeks_summary_text(payload)}
 
 
 def get_mcp_tools_schema() -> list[dict[str, Any]]:
@@ -657,6 +796,22 @@ def get_mcp_tools_schema() -> list[dict[str, Any]]:
                         "temporal_ref": {"type": "string"},
                         "now_iso_date": {"type": "string"},
                         "language": {"type": "string"},
+                    },
+                    "required": [],
+                    "additionalProperties": False,
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "get_recent_weeks_summary",
+                "description": "Get a trend/evolution summary for recent weeks up to current week (default 4, configurable).",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "weeks_count": {"type": "integer", "minimum": 1, "maximum": 24},
+                        "now_iso_date": {"type": "string"},
                     },
                     "required": [],
                     "additionalProperties": False,
@@ -774,6 +929,16 @@ def execute_mcp_tool(
             start_iso=start_iso,
             end_iso=end_iso,
             temporal_resolution=temporal_resolution,
+            output_mode="text",
+        )
+
+    if name == "get_recent_weeks_summary":
+        weeks_count = int(arguments.get("weeks_count", 4))
+        now_iso_date = arguments.get("now_iso_date")
+        return get_recent_weeks_summary_tool(
+            db,
+            weeks_count=weeks_count,
+            now_iso_date=str(now_iso_date) if now_iso_date else None,
             output_mode="text",
         )
 
