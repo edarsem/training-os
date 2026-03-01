@@ -1,4 +1,5 @@
 from sqlalchemy.orm import Session as DBSession
+from sqlalchemy import func
 from app.models import models
 from app.schemas import schemas
 from datetime import date
@@ -18,6 +19,14 @@ def get_sessions_by_date_range(db: DBSession, start_date: date, end_date: date) 
 
 def get_session_by_id(db: DBSession, session_id: int) -> Optional[models.Session]:
     return db.query(models.Session).filter(models.Session.id == session_id).first()
+
+
+def get_first_session_date(db: DBSession) -> Optional[date]:
+    return db.query(func.min(models.Session.date)).scalar()
+
+
+def get_last_session_date(db: DBSession) -> Optional[date]:
+    return db.query(func.max(models.Session.date)).scalar()
 
 def create_session(db: DBSession, session: schemas.SessionCreate) -> models.Session:
     db_session = models.Session(**session.model_dump())

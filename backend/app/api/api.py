@@ -3,8 +3,15 @@ from sqlalchemy.orm import Session
 from typing import List
 from datetime import date, datetime, timedelta
 from app.core.database import get_db
+from app.core.config import settings
+from app.core.training_load_defaults import (
+    DEFAULT_TRAINING_LOAD_ATL_DAYS,
+    DEFAULT_TRAINING_LOAD_CTL_DAYS,
+    DEFAULT_TRAINING_LOAD_ZONE_COEFFICIENTS,
+)
 from app.core.strava import StravaAPIError, StravaClient, StravaConfigError
 from app.llm.service import LLMConfigurationError, LLMProviderError, TrainingOSLLMService
+from app.training_load import TrainingLoadConfig, compute_training_load_series
 from app.models import models
 from app.schemas import schemas
 from app.crud import crud
@@ -376,6 +383,62 @@ def get_week_summary(year: int, week_number: int, db: Session = Depends(get_db))
         total_duration_minutes=total_duration,
         total_distance_km=total_distance,
         total_elevation_gain_m=total_elevation
+    )
+
+
+@router.get("/training-load", response_model=schemas.TrainingLoadResponse)
+def get_training_load(
+    start_date: date | None = None,
+    end_date: date | None = None,
+    db: Session = Depends(get_db),
+):
+    today = date.today()
+    first_session_date = crud.get_first_session_date(db)
+
+    resolved_end = end_date or today
+    resolved_start = start_date or first_session_date or resolved_end
+
+    if resolved_end < resolved_start:
+        raise HTTPException(status_code=400, detail="end_date must be greater than or equal to start_date")
+
+    warmup_start = first_session_date or resolved_start
+    sessions = crud.get_sessions_by_date_range(db, warmup_start, resolved_end)
+
+    config = TrainingLoadConfig(
+        threshold_hr=float(settings.TRAINING_LOAD_THRESHOLD_HR_BPM),
+        zone_coefficients=list(DEFAULT_TRAINING_LOAD_ZONE_COEFFICIENTS),
+        atl_time_constant_days=float(DEFAULT_TRAINING_LOAD_ATL_DAYS),
+        ctl_time_constant_days=float(DEFAULT_TRAINING_LOAD_CTL_DAYS),
+    )
+
+    computed = compute_training_load_series(
+        sessions=sessions,
+        start_date=warmup_start,
+        end_date=resolved_end,
+        config=config,
+    )
+
+    filtered_daily = [point for point in computed["daily"] if point["date"] >= resolved_start]
+
+    current_atl = float(filtered_daily[-1]["atl"]) if filtered_daily else 0.0
+    current_ctl = float(filtered_daily[-1]["ctl"]) if filtered_daily else 0.0
+    current_acwr = filtered_daily[-1]["acwr"] if filtered_daily else None
+
+    assumptions = [
+        "Session zone time is approximated using average HR for full moving duration (v1).",
+        "Sessions without HR contribute 0 load until detailed zone-duration data is available.",
+        "Zone coefficients and ATL/CTL constants currently use project-level defaults.",
+    ]
+
+    return schemas.TrainingLoadResponse(
+        start_date=resolved_start,
+        end_date=resolved_end,
+        current_atl=current_atl,
+        current_ctl=current_ctl,
+        current_acwr=current_acwr,
+        config=schemas.TrainingLoadConfigResponse(**computed["config"]),
+        assumptions=assumptions,
+        daily=[schemas.TrainingLoadDailyPoint(**point) for point in filtered_daily],
     )
 
 

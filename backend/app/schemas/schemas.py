@@ -89,6 +89,45 @@ class WeekSummaryResponse(BaseModel):
     total_elevation_gain_m: int = 0
 
 
+class TrainingLoadSessionBreakdown(BaseModel):
+    session_id: int
+    type: str
+    duration_minutes: int
+    average_hr_bpm: Optional[float] = None
+    zone: Optional[str] = None
+    zone_coefficient: float = 0.0
+    session_load: float = 0.0
+
+
+class TrainingLoadDailyPoint(BaseModel):
+    date: date
+    load: float
+    atl: float
+    ctl: float
+    acwr: Optional[float] = None
+    zone_minutes: dict[str, int] = Field(default_factory=dict)
+    missing_hr_minutes: int = 0
+    session_breakdown: List[TrainingLoadSessionBreakdown] = Field(default_factory=list)
+
+
+class TrainingLoadConfigResponse(BaseModel):
+    threshold_hr: float
+    zone_coefficients: List[float]
+    atl_time_constant_days: float
+    ctl_time_constant_days: float
+
+
+class TrainingLoadResponse(BaseModel):
+    start_date: date
+    end_date: date
+    current_atl: float
+    current_ctl: float
+    current_acwr: Optional[float] = None
+    config: TrainingLoadConfigResponse
+    assumptions: List[str] = Field(default_factory=list)
+    daily: List[TrainingLoadDailyPoint] = Field(default_factory=list)
+
+
 class StravaActivityResponse(BaseModel):
     id: Optional[int] = None
     name: Optional[str] = None
