@@ -66,6 +66,7 @@ document.addEventListener('alpine:init', () => {
         currentYear: 0,
         currentWeek: 0,
         weekLabel: '',
+        weekJumpDate: '',
         weekDays: [],
         
         summary: {
@@ -178,6 +179,7 @@ document.addEventListener('alpine:init', () => {
         updateWeekInfo() {
             this.currentYear = getIsoWeekYear(this.currentDate);
             this.currentWeek = getIsoWeek(this.currentDate);
+            this.weekJumpDate = toIsoDate(this.currentDate);
             
             const start = getStartOfIsoWeek(this.currentDate);
             const end = addDays(start, 6);
@@ -202,6 +204,22 @@ document.addEventListener('alpine:init', () => {
 
         nextWeek() {
             this.currentDate = addWeeks(this.currentDate, 1);
+            this.updateWeekInfo();
+            this.fetchData();
+        },
+
+        jumpToDateInWeek() {
+            const value = String(this.weekJumpDate || '').trim();
+            if (!value) return;
+            const parsed = new Date(`${value}T12:00:00`);
+            if (Number.isNaN(parsed.getTime())) return;
+            this.currentDate = parsed;
+            this.updateWeekInfo();
+            this.fetchData();
+        },
+
+        goToCurrentWeek() {
+            this.currentDate = new Date();
             this.updateWeekInfo();
             this.fetchData();
         },

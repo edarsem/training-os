@@ -93,7 +93,7 @@
                     <p class="text-gray-700 whitespace-pre-wrap" x-text="plan.description || 'Click to add your weekly plan.'"></p>
                 </div>
 
-                <form x-show="editPlan" @submit.prevent="savePlan()" x-cloak class="space-y-3">
+                <form x-show="editPlan" @submit.prevent="savePlan()" @keydown.meta.enter.prevent="savePlan()" @keydown.ctrl.enter.prevent="savePlan()" x-cloak class="space-y-3">
                     <div>
                         <textarea x-model="planForm.description" rows="4" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm border p-2"></textarea>
                     </div>
@@ -121,14 +121,16 @@
             <div>
                 <div class="grid grid-cols-3 items-center gap-3 mb-4">
                     <div class="justify-self-start">
-                        <button @click="prevWeek()" class="px-4 py-2 bg-white border rounded-full shadow-sm hover:bg-gray-50 text-sm font-medium">&larr; Prev Week</button>
+                        <button @click="prevWeek()" class="w-32 px-4 py-2 bg-white border rounded-full shadow-sm hover:bg-gray-50 text-sm font-medium text-center">&larr; Prev Week</button>
                     </div>
                     <div class="justify-self-center text-sm text-gray-600 font-medium" x-text="weekLabel"></div>
                     <div class="justify-self-end flex items-center gap-2">
+                        <input type="date" x-model="weekJumpDate" @change="jumpToDateInWeek()" class="px-2 py-2 bg-white border rounded shadow-sm text-sm">
+                        <button @click="goToCurrentWeek()" class="px-3 py-2 bg-white border rounded shadow-sm hover:bg-gray-50 text-sm font-medium">Today</button>
                         <button @click="refreshFromStrava()" :disabled="isRefreshing" class="px-4 py-2 bg-white border rounded-full shadow-sm hover:bg-gray-50 text-sm font-medium disabled:opacity-50">
                             <span x-text="isRefreshing ? 'Refreshing…' : '⟳ Refresh Strava'"></span>
                         </button>
-                        <button @click="nextWeek()" class="px-4 py-2 bg-white border rounded-full shadow-sm hover:bg-gray-50 text-sm font-medium">Next Week &rarr;</button>
+                        <button @click="nextWeek()" class="w-32 px-4 py-2 bg-white border rounded-full shadow-sm hover:bg-gray-50 text-sm font-medium text-center">Next Week &rarr;</button>
                     </div>
                 </div>
                 <div class="grid grid-cols-1 md:grid-cols-7 gap-4">
@@ -279,7 +281,7 @@
         <div x-show="isSessionModalOpen" class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50" x-cloak>
             <div class="bg-white rounded-lg p-6 w-full max-w-md" @click.away="isSessionModalOpen = false">
                 <h3 class="text-lg font-bold mb-4" x-text="sessionForm.id ? '🎯 Activity Details' : '➕ Add Activity'"></h3>
-                <form @submit.prevent="saveSession()" class="space-y-4">
+                <form @submit.prevent="saveSession()" @keydown.meta.enter.prevent="saveSession()" @keydown.ctrl.enter.prevent="saveSession()" class="space-y-4">
                     <div class="grid grid-cols-2 gap-4">
                         <div>
                             <label class="block text-sm font-medium text-gray-700">Type</label>
@@ -374,7 +376,7 @@
         <div x-show="isNoteModalOpen" class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50" x-cloak>
             <div class="bg-white rounded-lg p-6 w-full max-w-md" @click.away="isNoteModalOpen = false">
                 <h3 class="text-lg font-bold mb-4">Day Note</h3>
-                <form @submit.prevent="saveNote()" class="space-y-4">
+                <form @submit.prevent="saveNote()" @keydown.meta.enter.prevent="saveNote()" @keydown.ctrl.enter.prevent="saveNote()" class="space-y-4">
                     <div>
                         <label class="block text-sm font-medium text-gray-700">Context, fatigue, stress...</label>
                         <textarea x-model="noteForm.note" rows="4" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm border p-2" required></textarea>
