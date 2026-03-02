@@ -308,6 +308,30 @@ def delete_session(session_id: int, db: Session = Depends(get_db)):
         raise HTTPException(status_code=404, detail="Session not found")
     return {"ok": True}
 
+
+@router.get("/sessions/{session_id}/hr-zones", response_model=schemas.SessionHRZonesResponse)
+def read_session_hr_zones(session_id: int, db: Session = Depends(get_db)):
+    session = crud.get_session_by_id(db, session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    zone_map = crud.get_session_hr_zone_time_map(db, [session_id])
+    zone_seconds = zone_map.get(session_id, {
+        "zone_1_seconds": 0,
+        "zone_2_seconds": 0,
+        "zone_3_seconds": 0,
+        "zone_4_seconds": 0,
+        "zone_5_seconds": 0,
+        "zone_6_seconds": 0,
+    })
+    total_seconds = int(sum(int(value or 0) for value in zone_seconds.values()))
+
+    return schemas.SessionHRZonesResponse(
+        session_id=session_id,
+        zone_seconds={key: int(value or 0) for key, value in zone_seconds.items()},
+        total_seconds=total_seconds,
+    )
+
 # --- Day Notes ---
 @router.get("/day-notes", response_model=List[schemas.DayNoteResponse])
 def read_day_notes(start_date: date, end_date: date, db: Session = Depends(get_db)):

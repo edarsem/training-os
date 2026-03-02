@@ -35,6 +35,12 @@ class SessionResponse(SessionBase):
     class Config:
         from_attributes = True
 
+
+class SessionHRZonesResponse(BaseModel):
+    session_id: int
+    zone_seconds: dict[str, int] = Field(default_factory=dict)
+    total_seconds: int = 0
+
 # --- DayNote Schemas ---
 class DayNoteBase(BaseModel):
     date: date
