@@ -20,6 +20,7 @@ class Session(Base):
     average_heart_rate_bpm = Column(Float, nullable=True)
     max_heart_rate_bpm = Column(Float, nullable=True)
     perceived_intensity = Column(Integer, nullable=True) # 1-10
+    training_load = Column(Float, nullable=True)
     notes = Column(Text, nullable=True)
     
     created_at = Column(DateTime(timezone=True), server_default=func.now())
@@ -36,6 +37,19 @@ class SessionHRZoneTime(Base):
     zone_4_seconds = Column(Integer, nullable=False, default=0)
     zone_5_seconds = Column(Integer, nullable=False, default=0)
     zone_6_seconds = Column(Integer, nullable=False, default=0)
+
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), onupdate=func.now())
+
+
+class DailyTrainingLoad(Base):
+    __tablename__ = "daily_training_load"
+
+    date = Column(Date, primary_key=True, index=True)
+    load = Column(Float, nullable=False, default=0.0)
+    atl = Column(Float, nullable=False, default=0.0)
+    ctl = Column(Float, nullable=False, default=0.0)
+    acwr = Column(Float, nullable=True)
 
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())

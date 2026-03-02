@@ -425,14 +425,54 @@ def get_training_load(
     if resolved_end < resolved_start:
         raise HTTPException(status_code=400, detail="end_date must be greater than or equal to start_date")
 
+    threshold_hr_bpm = _get_threshold_hr_or_raise()
+
+    persisted_daily = crud.get_daily_training_load_by_date_range(db, resolved_start, resolved_end)
+    if persisted_daily:
+        current_atl = float(persisted_daily[-1].atl)
+        current_ctl = float(persisted_daily[-1].ctl)
+        current_acwr = float(persisted_daily[-1].acwr) if persisted_daily[-1].acwr is not None else None
+
+        assumptions = [
+            "Daily ATL/CTL/ACWR values are loaded from persisted history.",
+            "Session loads are precomputed and stored for fast curve retrieval.",
+            "Zone coefficients and ATL/CTL constants currently use project-level defaults.",
+        ]
+
+        return schemas.TrainingLoadResponse(
+            start_date=resolved_start,
+            end_date=resolved_end,
+            current_atl=current_atl,
+            current_ctl=current_ctl,
+            current_acwr=current_acwr,
+            config=schemas.TrainingLoadConfigResponse(
+                threshold_hr=threshold_hr_bpm,
+                zone_coefficients=list(DEFAULT_TRAINING_LOAD_ZONE_COEFFICIENTS),
+                atl_time_constant_days=float(DEFAULT_TRAINING_LOAD_ATL_DAYS),
+                ctl_time_constant_days=float(DEFAULT_TRAINING_LOAD_CTL_DAYS),
+            ),
+            assumptions=assumptions,
+            daily=[
+                schemas.TrainingLoadDailyPoint(
+                    date=point.date,
+                    load=float(point.load),
+                    atl=float(point.atl),
+                    ctl=float(point.ctl),
+                    acwr=float(point.acwr) if point.acwr is not None else None,
+                    zone_minutes={},
+                    missing_hr_minutes=0,
+                    session_breakdown=[],
+                )
+                for point in persisted_daily
+            ],
+        )
+
     warmup_start = first_session_date or resolved_start
     sessions = crud.get_sessions_by_date_range(db, warmup_start, resolved_end)
     session_zone_time_map = crud.get_session_hr_zone_time_map(
         db,
         [int(session.id) for session in sessions if session.id is not None],
     )
-
-    threshold_hr_bpm = _get_threshold_hr_or_raise()
 
     config = TrainingLoadConfig(
         threshold_hr=threshold_hr_bpm,

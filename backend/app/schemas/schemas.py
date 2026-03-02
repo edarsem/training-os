@@ -18,6 +18,7 @@ class SessionBase(BaseModel):
     average_heart_rate_bpm: Optional[float] = None
     max_heart_rate_bpm: Optional[float] = None
     perceived_intensity: Optional[int] = Field(None, ge=1, le=10)
+    training_load: Optional[float] = None
     notes: Optional[str] = None
 
 class SessionCreate(SessionBase):

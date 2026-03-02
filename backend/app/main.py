@@ -1,10 +1,11 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from app.api.api import router as api_router
-from app.core.database import engine, Base
+from app.core.database import engine, Base, run_sqlite_schema_updates
 
 # Create database tables
 Base.metadata.create_all(bind=engine)
+run_sqlite_schema_updates()
 
 app = FastAPI(
     title="Training OS API",

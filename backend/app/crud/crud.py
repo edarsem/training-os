@@ -75,6 +75,40 @@ def get_session_hr_zone_time_map(
         }
     return out
 
+
+def upsert_daily_training_load_points(
+    db: DBSession,
+    points: List[dict],
+) -> None:
+    for point in points:
+        point_date = point.get("date")
+        if point_date is None:
+            continue
+
+        record = db.query(models.DailyTrainingLoad).filter(models.DailyTrainingLoad.date == point_date).first()
+        if not record:
+            record = models.DailyTrainingLoad(date=point_date)
+            db.add(record)
+
+        record.load = float(point.get("load", 0.0))
+        record.atl = float(point.get("atl", 0.0))
+        record.ctl = float(point.get("ctl", 0.0))
+        acwr_value = point.get("acwr")
+        record.acwr = float(acwr_value) if acwr_value is not None else None
+
+
+def get_daily_training_load_by_date_range(
+    db: DBSession,
+    start_date: date,
+    end_date: date,
+) -> List[models.DailyTrainingLoad]:
+    return (
+        db.query(models.DailyTrainingLoad)
+        .filter(models.DailyTrainingLoad.date >= start_date, models.DailyTrainingLoad.date <= end_date)
+        .order_by(models.DailyTrainingLoad.date.asc())
+        .all()
+    )
+
 def create_session(db: DBSession, session: schemas.SessionCreate) -> models.Session:
     db_session = models.Session(**session.model_dump())
     db.add(db_session)
