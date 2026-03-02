@@ -8,6 +8,7 @@ from typing import Any
 from urllib import error, parse, request
 
 from app.core.config import settings
+from app.core.training_load_defaults import DEFAULT_TRAINING_LOAD_ZONE_BOUNDARIES_PCT
 
 
 class StravaConfigError(RuntimeError):
@@ -204,6 +205,42 @@ class StravaClient:
             raise StravaAPIError("Unexpected Strava response for activity details")
         return body, self._extract_rate_limits(headers)
 
+    def _fetch_activity_streams(
+        self,
+        activity_id: int,
+        keys: list[str],
+    ) -> tuple[dict[str, Any], StravaRateLimits]:
+        key_list = ",".join(keys)
+        query = parse.urlencode({"keys": key_list, "key_by_type": "true"})
+        url = f"{self.api_base_url}/activities/{activity_id}/streams?{query}"
+        body, headers = self._request(
+            method="GET",
+            url=url,
+            headers={"Authorization": f"Bearer {self.access_token}"},
+        )
+        if not isinstance(body, dict):
+            raise StravaAPIError("Unexpected Strava response for activity streams")
+        return body, self._extract_rate_limits(headers)
+
+    def _get_zone_index_from_hr(self, heart_rate_bpm: float, threshold_hr_bpm: float) -> int:
+        if threshold_hr_bpm <= 0:
+            return 0
+
+        pct = (heart_rate_bpm / threshold_hr_bpm) * 100.0
+        z1_max, z2_max, z3_max, z4_max, z5_max = DEFAULT_TRAINING_LOAD_ZONE_BOUNDARIES_PCT
+
+        if pct < z1_max:
+            return 0
+        if pct <= z2_max:
+            return 1
+        if pct <= z3_max:
+            return 2
+        if pct <= z4_max:
+            return 3
+        if pct <= z5_max:
+            return 4
+        return 5
+
     def get_recent_activities(self, limit: int = 2) -> dict[str, Any]:
         self._ensure_basic_config()
         if self._is_access_token_expired():
@@ -317,4 +354,72 @@ class StravaClient:
                 "read_limit": rate_limits.read_limit,
                 "read_usage": rate_limits.read_usage,
             },
+        }
+
+    def get_activity_hr_zone_seconds(
+        self,
+        activity_id: int,
+        threshold_hr_bpm: float,
+    ) -> dict[str, int] | None:
+        self._ensure_basic_config()
+        normalized_activity_id = int(activity_id)
+        normalized_threshold_hr = float(threshold_hr_bpm)
+
+        auto_refreshed = False
+        if self._is_access_token_expired():
+            self.refresh_access_token()
+            auto_refreshed = True
+
+        try:
+            streams, _ = self._fetch_activity_streams(normalized_activity_id, keys=["time", "heartrate"])
+        except StravaAPIError as exc:
+            if exc.status_code != 401:
+                raise
+            self.refresh_access_token()
+            auto_refreshed = True
+            streams, _ = self._fetch_activity_streams(normalized_activity_id, keys=["time", "heartrate"])
+
+        heartrate_stream = streams.get("heartrate") if isinstance(streams, dict) else None
+        time_stream = streams.get("time") if isinstance(streams, dict) else None
+
+        heartrate_values = heartrate_stream.get("data") if isinstance(heartrate_stream, dict) else None
+        if not isinstance(heartrate_values, list) or len(heartrate_values) == 0:
+            return None
+
+        time_values = time_stream.get("data") if isinstance(time_stream, dict) else None
+        has_time_values = isinstance(time_values, list) and len(time_values) == len(heartrate_values)
+
+        zone_seconds = [0, 0, 0, 0, 0, 0]
+        total_points = len(heartrate_values)
+
+        for idx, hr_raw in enumerate(heartrate_values):
+            try:
+                hr_value = float(hr_raw)
+            except (TypeError, ValueError):
+                continue
+            if hr_value <= 0:
+                continue
+
+            if has_time_values and idx < (total_points - 1):
+                try:
+                    dt = int(time_values[idx + 1]) - int(time_values[idx])
+                except (TypeError, ValueError):
+                    dt = 1
+                sample_seconds = max(1, dt)
+            else:
+                sample_seconds = 1
+
+            zone_index = self._get_zone_index_from_hr(hr_value, normalized_threshold_hr)
+            zone_seconds[zone_index] += sample_seconds
+
+        if auto_refreshed:
+            self._save_tokens_to_store()
+
+        return {
+            "zone_1_seconds": int(zone_seconds[0]),
+            "zone_2_seconds": int(zone_seconds[1]),
+            "zone_3_seconds": int(zone_seconds[2]),
+            "zone_4_seconds": int(zone_seconds[3]),
+            "zone_5_seconds": int(zone_seconds[4]),
+            "zone_6_seconds": int(zone_seconds[5]),
         }

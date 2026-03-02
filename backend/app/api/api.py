@@ -19,6 +19,15 @@ from app.crud import crud
 router = APIRouter()
 
 
+def _get_threshold_hr_or_raise() -> float:
+    if settings.TRAINING_LOAD_THRESHOLD_HR_BPM is None:
+        raise HTTPException(
+            status_code=400,
+            detail="TRAINING_LOAD_THRESHOLD_HR_BPM is missing. Set it in your .env file.",
+        )
+    return float(settings.TRAINING_LOAD_THRESHOLD_HR_BPM)
+
+
 def _map_strava_sport_type_to_session_type(sport_type: str | None) -> str:
     if not sport_type:
         return "other"
@@ -139,12 +148,13 @@ def _map_strava_activity_to_session_payload(activity: dict) -> dict | None:
         "average_pace_min_per_km": average_pace_min_per_km,
         "average_heart_rate_bpm": float(average_heart_rate) if average_heart_rate is not None else None,
         "max_heart_rate_bpm": float(max_heart_rate) if max_heart_rate is not None else None,
+        "hr_zone_seconds": activity.get("hr_zone_seconds"),
         "notes": notes,
         "name": activity.get("name"),
     }
 
 
-def _enrich_activity_for_import(activity: dict, client: StravaClient) -> dict:
+def _enrich_activity_for_import(activity: dict, client: StravaClient, threshold_hr_bpm: float) -> dict:
     activity_id = activity.get("id")
     if activity_id is None:
         return activity
@@ -152,26 +162,34 @@ def _enrich_activity_for_import(activity: dict, client: StravaClient) -> dict:
     if activity.get("private"):
         return activity
 
+    merged = dict(activity)
+
     has_description = str(activity.get("description") or "").strip() != ""
-    if has_description:
-        return activity
+    if not has_description:
+        try:
+            detail = client.get_activity_by_id(int(activity_id)).get("activity", {})
+            if isinstance(detail, dict):
+                merged.update(detail)
+        except Exception:
+            pass
 
     try:
-        detail = client.get_activity_by_id(int(activity_id)).get("activity", {})
+        zone_seconds = client.get_activity_hr_zone_seconds(
+            int(activity_id),
+            threshold_hr_bpm=float(threshold_hr_bpm),
+        )
+        if zone_seconds:
+            merged["hr_zone_seconds"] = zone_seconds
     except Exception:
-        return activity
+        pass
 
-    if not isinstance(detail, dict):
-        return activity
-
-    merged = dict(activity)
-    merged.update(detail)
     return merged
 
 
 def _upsert_strava_activities(
     db: Session,
     client: StravaClient,
+    threshold_hr_bpm: float,
     activities: List[dict],
 ) -> tuple[int, int, int, List[schemas.StravaImportItemResponse]]:
     imported_count = 0
@@ -180,7 +198,7 @@ def _upsert_strava_activities(
     items: List[schemas.StravaImportItemResponse] = []
 
     for activity in activities:
-        enriched_activity = _enrich_activity_for_import(activity, client)
+        enriched_activity = _enrich_activity_for_import(activity, client, threshold_hr_bpm=threshold_hr_bpm)
         payload = _map_strava_activity_to_session_payload(enriched_activity)
         if payload is None:
             skipped_count += 1
@@ -230,6 +248,12 @@ def _upsert_strava_activities(
             imported_count += 1
             action = "imported"
             session_id = new_session.id
+
+        crud.upsert_session_hr_zone_time(
+            db,
+            session_id=session_id,
+            zone_seconds=payload.get("hr_zone_seconds"),
+        )
 
         items.append(
             schemas.StravaImportItemResponse(
@@ -403,9 +427,15 @@ def get_training_load(
 
     warmup_start = first_session_date or resolved_start
     sessions = crud.get_sessions_by_date_range(db, warmup_start, resolved_end)
+    session_zone_time_map = crud.get_session_hr_zone_time_map(
+        db,
+        [int(session.id) for session in sessions if session.id is not None],
+    )
+
+    threshold_hr_bpm = _get_threshold_hr_or_raise()
 
     config = TrainingLoadConfig(
-        threshold_hr=float(settings.TRAINING_LOAD_THRESHOLD_HR_BPM),
+        threshold_hr=threshold_hr_bpm,
         zone_coefficients=list(DEFAULT_TRAINING_LOAD_ZONE_COEFFICIENTS),
         atl_time_constant_days=float(DEFAULT_TRAINING_LOAD_ATL_DAYS),
         ctl_time_constant_days=float(DEFAULT_TRAINING_LOAD_CTL_DAYS),
@@ -413,6 +443,7 @@ def get_training_load(
 
     computed = compute_training_load_series(
         sessions=sessions,
+        session_zone_time_map=session_zone_time_map,
         start_date=warmup_start,
         end_date=resolved_end,
         config=config,
@@ -425,8 +456,9 @@ def get_training_load(
     current_acwr = filtered_daily[-1]["acwr"] if filtered_daily else None
 
     assumptions = [
-        "Session zone time is approximated using average HR for full moving duration (v1).",
-        "Sessions without HR contribute 0 load until detailed zone-duration data is available.",
+        "If available, per-session zone seconds are computed from Strava HR streams and persisted.",
+        "Sessions without persisted zone seconds fallback to average-HR whole-session approximation.",
+        "Sessions without HR data contribute 0 load.",
         "Zone coefficients and ATL/CTL constants currently use project-level defaults.",
     ]
 
@@ -468,6 +500,7 @@ def import_recent_strava_activities(
     db: Session = Depends(get_db),
 ):
     client = StravaClient()
+    threshold_hr_bpm = _get_threshold_hr_or_raise()
     try:
         page_data = client.get_activities_page(page=1, per_page=limit)
     except StravaConfigError as exc:
@@ -478,6 +511,7 @@ def import_recent_strava_activities(
     imported_count, updated_count, skipped_count, items = _upsert_strava_activities(
         db=db,
         client=client,
+        threshold_hr_bpm=threshold_hr_bpm,
         activities=page_data.get("activities", []),
     )
 
@@ -506,6 +540,7 @@ def refresh_strava_activities_until_known(
     db: Session = Depends(get_db),
 ):
     client = StravaClient()
+    threshold_hr_bpm = _get_threshold_hr_or_raise()
 
     all_new_activities: List[dict] = []
     checked_count = 0
@@ -545,6 +580,7 @@ def refresh_strava_activities_until_known(
     imported_count, updated_count, skipped_count, items = _upsert_strava_activities(
         db=db,
         client=client,
+        threshold_hr_bpm=threshold_hr_bpm,
         activities=all_new_activities,
     )
     db.commit()
@@ -572,6 +608,7 @@ def backfill_strava_activities(
     db: Session = Depends(get_db),
 ):
     client = StravaClient()
+    threshold_hr_bpm = _get_threshold_hr_or_raise()
 
     all_activities: List[dict] = []
     checked_count = 0
@@ -601,6 +638,7 @@ def backfill_strava_activities(
     imported_count, updated_count, skipped_count, items = _upsert_strava_activities(
         db=db,
         client=client,
+        threshold_hr_bpm=threshold_hr_bpm,
         activities=all_activities,
     )
     db.commit()

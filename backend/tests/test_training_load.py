@@ -37,6 +37,7 @@ class TestTrainingLoadComputation(unittest.TestCase):
 
         result = compute_training_load_series(
             sessions=sessions,
+            session_zone_time_map={},
             start_date=date(2026, 2, 1),
             end_date=date(2026, 2, 2),
             config=config,

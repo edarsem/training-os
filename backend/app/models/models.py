@@ -25,6 +25,21 @@ class Session(Base):
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
 
+
+class SessionHRZoneTime(Base):
+    __tablename__ = "session_hr_zone_time"
+
+    session_id = Column(Integer, ForeignKey("sessions.id", ondelete="CASCADE"), primary_key=True)
+    zone_1_seconds = Column(Integer, nullable=False, default=0)
+    zone_2_seconds = Column(Integer, nullable=False, default=0)
+    zone_3_seconds = Column(Integer, nullable=False, default=0)
+    zone_4_seconds = Column(Integer, nullable=False, default=0)
+    zone_5_seconds = Column(Integer, nullable=False, default=0)
+    zone_6_seconds = Column(Integer, nullable=False, default=0)
+
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), onupdate=func.now())
+
 class DayNote(Base):
     __tablename__ = "day_notes"
 

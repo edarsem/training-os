@@ -58,6 +58,7 @@ def _build_empty_zone_minutes() -> dict[str, int]:
 def compute_training_load_series(
     *,
     sessions: list[models.Session],
+    session_zone_time_map: dict[int, dict[str, int]] | None,
     start_date: date,
     end_date: date,
     config: TrainingLoadConfig,
@@ -86,6 +87,48 @@ def compute_training_load_series(
             duration_minutes = int(session.moving_duration_minutes or session.duration_minutes or 0)
             if duration_minutes <= 0:
                 continue
+
+            session_zone_seconds = None
+            if session_zone_time_map and session.id is not None:
+                session_zone_seconds = session_zone_time_map.get(int(session.id))
+
+            if session_zone_seconds:
+                zone_seconds_values = [
+                    int(session_zone_seconds.get("zone_1_seconds", 0)),
+                    int(session_zone_seconds.get("zone_2_seconds", 0)),
+                    int(session_zone_seconds.get("zone_3_seconds", 0)),
+                    int(session_zone_seconds.get("zone_4_seconds", 0)),
+                    int(session_zone_seconds.get("zone_5_seconds", 0)),
+                    int(session_zone_seconds.get("zone_6_seconds", 0)),
+                ]
+                total_zone_seconds = sum(max(0, value) for value in zone_seconds_values)
+                if total_zone_seconds > 0:
+                    session_load = 0.0
+                    for zone_idx, seconds_value in enumerate(zone_seconds_values):
+                        seconds_in_zone = max(0, int(seconds_value))
+                        if seconds_in_zone <= 0:
+                            continue
+
+                        minutes_in_zone = float(seconds_in_zone) / 60.0
+                        zone_minutes[ZONE_NAMES[zone_idx]] += int(round(minutes_in_zone))
+                        session_load += minutes_in_zone * float(config.zone_coefficients[zone_idx])
+
+                    day_load += session_load
+                    duration_from_stream_minutes = int(round(float(total_zone_seconds) / 60.0))
+                    effective_duration_minutes = max(duration_minutes, duration_from_stream_minutes)
+
+                    session_breakdown.append(
+                        {
+                            "session_id": session.id,
+                            "type": session.type,
+                            "duration_minutes": effective_duration_minutes,
+                            "average_hr_bpm": float(session.average_heart_rate_bpm) if session.average_heart_rate_bpm else None,
+                            "zone": "stream_zones",
+                            "zone_coefficient": round(session_load / max(1.0, float(effective_duration_minutes)), 3),
+                            "session_load": round(session_load, 3),
+                        }
+                    )
+                    continue
 
             avg_hr = session.average_heart_rate_bpm
             if avg_hr is None or avg_hr <= 0:
