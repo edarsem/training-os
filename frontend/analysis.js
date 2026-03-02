@@ -1,4 +1,7 @@
 const API_BASE = 'http://localhost:8000/api';
+const ANALYSIS_WEEKS = 20;
+const chartRegistry = [];
+let isSyncingHover = false;
 
 function addDays(date, days) {
   const next = new Date(date);
@@ -33,12 +36,110 @@ function labelForWeek(startDate) {
   return d;
 }
 
+function registerChart(chart) {
+  chartRegistry.push(chart);
+  return chart;
+}
+
+function getActiveElementsForIndex(chart, index) {
+  if (index === null || index === undefined) return [];
+  const active = [];
+  chart.data.datasets.forEach((dataset, datasetIndex) => {
+    const value = dataset?.data?.[index];
+    if (value !== null && value !== undefined) {
+      active.push({ datasetIndex, index });
+    }
+  });
+  return active;
+}
+
+function syncChartsAtIndex(sourceChart, index) {
+  if (isSyncingHover) return;
+  isSyncingHover = true;
+  chartRegistry.forEach((chart) => {
+    if (chart === sourceChart) return;
+    const active = getActiveElementsForIndex(chart, index);
+    chart.setActiveElements(active);
+    chart.tooltip.setActiveElements(active, { x: 0, y: 0 });
+    chart.update('none');
+  });
+  isSyncingHover = false;
+}
+
+function baseOptions({ yTickFormatter, tooltipFilter, pointStyle = 'circle' } = {}) {
+  return {
+    responsive: true,
+    maintainAspectRatio: false,
+    interaction: {
+      mode: 'index',
+      intersect: false,
+      axis: 'x',
+    },
+    onHover(_event, elements, chart) {
+      const index = elements && elements.length > 0 ? elements[0].index : null;
+      syncChartsAtIndex(chart, index);
+    },
+    plugins: {
+      legend: {
+        display: true,
+        position: 'right',
+        labels: {
+          boxWidth: 10,
+          boxHeight: 10,
+          usePointStyle: true,
+          pointStyle,
+        },
+      },
+      tooltip: {
+        intersect: false,
+        mode: 'index',
+        filter: tooltipFilter,
+      },
+    },
+    scales: {
+      x: {
+        ticks: {
+          maxRotation: 0,
+          minRotation: 0,
+        },
+      },
+      y: {
+        beginAtZero: true,
+        ticks: yTickFormatter
+          ? {
+              callback: yTickFormatter,
+            }
+          : undefined,
+      },
+    },
+  };
+}
+
 async function fetchWeekSummary(year, week) {
   const res = await fetch(`${API_BASE}/summary/week/${year}/${week}`);
   if (!res.ok) {
     return null;
   }
   return await res.json();
+}
+
+async function fetchTrainingLoad(startDate, endDate) {
+  const params = new URLSearchParams({
+    start_date: startDate,
+    end_date: endDate,
+  });
+  const res = await fetch(`${API_BASE}/training-load?${params.toString()}`);
+  if (!res.ok) {
+    return null;
+  }
+  return await res.json();
+}
+
+function toIsoDate(date) {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
 }
 
 function computeMetrics(summary) {
@@ -73,7 +174,7 @@ function computeMetrics(summary) {
 
 function makeChart(canvasId, labels, data, title, color) {
   const ctx = document.getElementById(canvasId).getContext('2d');
-  new Chart(ctx, {
+  const chart = new Chart(ctx, {
     type: 'line',
     data: {
       labels,
@@ -89,32 +190,104 @@ function makeChart(canvasId, labels, data, title, color) {
         },
       ],
     },
-    options: {
-      responsive: true,
-      maintainAspectRatio: false,
-      plugins: {
-        legend: {
-          display: true,
-          position: 'right',
-          labels: {
-            boxWidth: 10,
-            boxHeight: 10,
-            usePointStyle: true,
-            pointStyle: 'circle'
-          }
-        },
-      },
-      scales: {
-        x: {
-          ticks: {
-            maxRotation: 0,
-            minRotation: 0,
-          }
-        },
-        y: { beginAtZero: true },
-      },
-    },
+    options: baseOptions(),
   });
+
+  return registerChart(chart);
+}
+
+function getWeeklyTrainingLoadPoints(weeks, trainingLoadResponse) {
+  const daily = trainingLoadResponse?.daily || [];
+  const byDate = new Map(daily.map((point) => [String(point.date), point]));
+
+  return weeks.map((week) => {
+    const endDate = addDays(week.start, 6);
+    const endIso = toIsoDate(endDate);
+    const exact = byDate.get(endIso);
+    if (exact) return exact;
+
+    for (let i = 0; i < 7; i += 1) {
+      const fallback = byDate.get(toIsoDate(addDays(endDate, -i)));
+      if (fallback) return fallback;
+    }
+    return null;
+  });
+}
+
+function makeAtlCtlChart(labels, weeklyLoadPoints) {
+  const ctx = document.getElementById('chart-atl-ctl').getContext('2d');
+  const chart = new Chart(ctx, {
+    type: 'line',
+    data: {
+      labels,
+      datasets: [
+        {
+          label: '🔥 Stress',
+          data: weeklyLoadPoints.map((point) => (point ? point.atl : null)),
+          borderColor: '#f97316',
+          backgroundColor: '#f97316',
+          tension: 0.2,
+          borderWidth: 2,
+          pointRadius: 2,
+        },
+        {
+          label: '📈 Trend',
+          data: weeklyLoadPoints.map((point) => (point ? point.ctl : null)),
+          borderColor: '#3b82f6',
+          backgroundColor: '#3b82f6',
+          tension: 0.2,
+          borderWidth: 2,
+          pointRadius: 2,
+        },
+      ],
+    },
+    options: baseOptions(),
+  });
+
+  return registerChart(chart);
+}
+
+function makeShapeChart(labels, weeklyLoadPoints) {
+  const ctx = document.getElementById('chart-shape').getContext('2d');
+  const acwrPctValues = weeklyLoadPoints.map((point) => {
+    if (!point || point.acwr === null || point.acwr === undefined) return null;
+    return Math.round(Number(point.acwr) * 1000) / 10;
+  });
+  const thresholds = [50, 80, 100, 150];
+
+  const chart = new Chart(ctx, {
+    type: 'line',
+    data: {
+      labels,
+      datasets: [
+        {
+          label: '⚖️ Shape',
+          data: acwrPctValues,
+          borderColor: '#7c3aed',
+          backgroundColor: '#7c3aed',
+          tension: 0.2,
+          borderWidth: 2,
+          pointRadius: 2,
+        },
+        ...thresholds.map((threshold) => ({
+          label: `Guide ${threshold}%`,
+          data: labels.map(() => threshold),
+          borderColor: '#9ca3af',
+          backgroundColor: '#9ca3af',
+          borderDash: [5, 4],
+          borderWidth: 1,
+          pointRadius: 0,
+        })),
+      ],
+    },
+    options: baseOptions({
+      yTickFormatter: (value) => `${value}%`,
+      tooltipFilter: (ctx) => ctx.datasetIndex === 0,
+      pointStyle: 'line',
+    }),
+  });
+
+  return registerChart(chart);
 }
 
 async function buildChart() {
@@ -122,7 +295,7 @@ async function buildChart() {
   const currentWeekStart = getStartOfIsoWeek(now);
 
   const weeks = [];
-  for (let i = 19; i >= 0; i -= 1) {
+  for (let i = ANALYSIS_WEEKS - 1; i >= 0; i -= 1) {
     const weekStart = addDays(currentWeekStart, -7 * i);
     weeks.push({
       start: weekStart,
@@ -134,9 +307,15 @@ async function buildChart() {
 
   const summaries = await Promise.all(weeks.map((week) => fetchWeekSummary(week.year, week.week)));
   const metrics = summaries.map((summary) => computeMetrics(summary));
+  const analysisStart = toIsoDate(weeks[0].start);
+  const analysisEnd = toIsoDate(addDays(weeks[weeks.length - 1].start, 6));
+  const trainingLoad = await fetchTrainingLoad(analysisStart, analysisEnd);
+  const weeklyLoadPoints = getWeeklyTrainingLoadPoints(weeks, trainingLoad);
 
   const labels = weeks.map((week) => week.label);
 
+  makeAtlCtlChart(labels, weeklyLoadPoints);
+  makeShapeChart(labels, weeklyLoadPoints);
   makeChart('chart-run', labels, metrics.map((m) => m.runTrailKm), '🏃', '#ef4444');
   makeChart('chart-elev', labels, metrics.map((m) => m.elevationM), '⛰️', '#16a34a');
   makeChart('chart-bike', labels, metrics.map((m) => m.bikeKm), '🚴', '#f97316');

@@ -80,7 +80,8 @@
             <h1 class="text-3xl font-bold text-gray-800">🏋️ Training OS</h1>
             <div class="flex items-center space-x-4">
                 <span class="font-semibold text-lg" x-text="weekLabel"></span>
-                <a href="analysis.html" class="px-3 py-1 bg-white border rounded shadow-sm hover:bg-gray-50">📈 Analysis</a>
+                <a href="analysis.html" class="px-3 py-1 bg-white border rounded shadow-sm hover:bg-gray-50">📈 Trends</a>
+                <a href="training-load.html" class="px-3 py-1 bg-white border rounded shadow-sm hover:bg-gray-50">📊 Training Load</a>
                 <a href="chat-history.html" class="px-3 py-1 bg-white border rounded shadow-sm hover:bg-gray-50">🗂️ Chat History</a>
             </div>
         </header>
@@ -282,7 +283,7 @@
 
         <!-- Session Modal -->
         <div x-show="isSessionModalOpen" class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50" x-cloak>
-            <div class="bg-white rounded-lg p-6 w-full max-w-md" @click.away="isSessionModalOpen = false">
+            <div class="bg-white rounded-lg p-6 w-full max-w-2xl max-h-[90vh] overflow-y-auto" @click.away="isSessionModalOpen = false">
                 <h3 class="text-lg font-bold mb-4" x-text="sessionForm.id ? '🎯 Activity Details' : '➕ Add Activity'"></h3>
                 <form @submit.prevent="saveSession()" @keydown.meta.enter.prevent="saveSession()" @keydown.ctrl.enter.prevent="saveSession()" class="space-y-4">
                     <div class="grid grid-cols-2 gap-4">
@@ -336,6 +337,14 @@
                             <div>Training load: <span class="font-medium" x-text="formatSessionCompactTrainingLoad(sessionForm) || '—'"></span></div>
                             <div>Avg pace: <span class="font-medium" x-text="formatPace(sessionForm.average_pace_min_per_km) || '—'"></span></div>
                             <div>HR avg/max: <span class="font-medium" x-text="formatHeartRate(sessionForm.average_heart_rate_bpm, sessionForm.max_heart_rate_bpm) || '—'"></span></div>
+                        </div>
+                        <div class="mt-3 border-t border-gray-200 pt-3">
+                            <div class="text-xs font-medium text-gray-700 mb-1">HR zones repartition</div>
+                            <div x-show="isLoadingSessionHrZones" class="text-xs text-gray-500">Loading HR zones…</div>
+                            <div x-show="!isLoadingSessionHrZones && !hasSessionHrZoneData()" class="text-xs text-gray-500">No HR zones data for this activity.</div>
+                            <div x-show="hasSessionHrZoneData()" class="h-28">
+                                <canvas id="session-hr-zones-chart"></canvas>
+                            </div>
                         </div>
                     </div>
 
@@ -395,6 +404,7 @@
 
     </div>
 
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/dompurify@3.2.6/dist/purify.min.js"></script>
     <script src="app.js"></script>

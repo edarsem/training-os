@@ -92,6 +92,17 @@ document.addEventListener('alpine:init', () => {
 
         isSessionModalOpen: false,
         sessionForm: { id: null, date: '', start_time: null, time_str: '', type: 'run', duration_minutes: 60, distance_km: null, elevation_gain_m: null, perceived_intensity: null, notes: '', strength_focuses: [] },
+        isLoadingSessionHrZones: false,
+        sessionHrZoneChart: null,
+        sessionHrZones: {
+            zone_1_seconds: 0,
+            zone_2_seconds: 0,
+            zone_3_seconds: 0,
+            zone_4_seconds: 0,
+            zone_5_seconds: 0,
+            zone_6_seconds: 0,
+            total_seconds: 0,
+        },
         isRefreshing: false,
         isRecomputingTrainingLoad: false,
 
@@ -579,11 +590,13 @@ document.addEventListener('alpine:init', () => {
 
         // --- Session Actions ---
         openSessionModal(dateStr) {
+            this.resetSessionHrZones();
             this.sessionForm = { id: null, date: dateStr, start_time: null, time_str: '', type: 'run', duration_minutes: 60, distance_km: null, elevation_gain_m: null, perceived_intensity: null, notes: '', strength_focuses: [] };
             this.isSessionModalOpen = true;
         },
 
         editSession(session) {
+            this.resetSessionHrZones();
             const parsed = this.parseStrengthMeta(session.notes);
             this.sessionForm = {
                 ...session,
@@ -592,6 +605,128 @@ document.addEventListener('alpine:init', () => {
                 strength_focuses: parsed.focuses
             };
             this.isSessionModalOpen = true;
+            this.fetchSessionHrZones(session.id);
+        },
+
+        resetSessionHrZones() {
+            this.isLoadingSessionHrZones = false;
+            if (this.sessionHrZoneChart) {
+                this.sessionHrZoneChart.destroy();
+                this.sessionHrZoneChart = null;
+            }
+            this.sessionHrZones = {
+                zone_1_seconds: 0,
+                zone_2_seconds: 0,
+                zone_3_seconds: 0,
+                zone_4_seconds: 0,
+                zone_5_seconds: 0,
+                zone_6_seconds: 0,
+                total_seconds: 0,
+            };
+        },
+
+        hasSessionHrZoneData() {
+            return (this.sessionHrZones.total_seconds || 0) > 0;
+        },
+
+        async fetchSessionHrZones(sessionId) {
+            if (!sessionId) return;
+            this.isLoadingSessionHrZones = true;
+            try {
+                const res = await fetch(`${API_BASE}/sessions/${sessionId}/hr-zones`);
+                if (!res.ok) {
+                    this.resetSessionHrZones();
+                    return;
+                }
+                const data = await res.json();
+                this.sessionHrZones = {
+                    zone_1_seconds: Number(data?.zone_seconds?.zone_1_seconds || 0),
+                    zone_2_seconds: Number(data?.zone_seconds?.zone_2_seconds || 0),
+                    zone_3_seconds: Number(data?.zone_seconds?.zone_3_seconds || 0),
+                    zone_4_seconds: Number(data?.zone_seconds?.zone_4_seconds || 0),
+                    zone_5_seconds: Number(data?.zone_seconds?.zone_5_seconds || 0),
+                    zone_6_seconds: Number(data?.zone_seconds?.zone_6_seconds || 0),
+                    total_seconds: Number(data?.total_seconds || 0),
+                };
+                this.$nextTick(() => this.renderSessionHrZonesChart());
+            } catch (e) {
+                console.error('Failed to fetch session HR zones', e);
+                this.resetSessionHrZones();
+            } finally {
+                this.isLoadingSessionHrZones = false;
+            }
+        },
+
+        renderSessionHrZonesChart() {
+            if (!this.hasSessionHrZoneData()) {
+                if (this.sessionHrZoneChart) {
+                    this.sessionHrZoneChart.destroy();
+                    this.sessionHrZoneChart = null;
+                }
+                return;
+            }
+
+            const canvas = document.getElementById('session-hr-zones-chart');
+            if (!canvas || typeof Chart === 'undefined') {
+                return;
+            }
+
+            if (this.sessionHrZoneChart) {
+                this.sessionHrZoneChart.destroy();
+                this.sessionHrZoneChart = null;
+            }
+
+            const total = this.sessionHrZones.total_seconds || 1;
+            const zoneSeconds = [
+                this.sessionHrZones.zone_1_seconds,
+                this.sessionHrZones.zone_2_seconds,
+                this.sessionHrZones.zone_3_seconds,
+                this.sessionHrZones.zone_4_seconds,
+                this.sessionHrZones.zone_5_seconds,
+                this.sessionHrZones.zone_6_seconds,
+            ];
+            const zonePercentages = zoneSeconds.map((value) => Math.round((value / total) * 1000) / 10);
+
+            this.sessionHrZoneChart = new Chart(canvas.getContext('2d'), {
+                type: 'bar',
+                data: {
+                    labels: ['Z1', 'Z2', 'Z3', 'Z4', 'Z5', 'Z6'],
+                    datasets: [
+                        {
+                            label: '% time',
+                            data: zonePercentages,
+                            backgroundColor: ['#93c5fd', '#60a5fa', '#34d399', '#fbbf24', '#f97316', '#ef4444'],
+                            borderRadius: 4,
+                        },
+                    ],
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: {
+                        legend: { display: false },
+                        tooltip: {
+                            callbacks: {
+                                label: (ctx) => {
+                                    const index = ctx.dataIndex;
+                                    const seconds = zoneSeconds[index] || 0;
+                                    const mins = Math.round(seconds / 60);
+                                    return `${ctx.parsed.y}% (${mins} min)`;
+                                },
+                            },
+                        },
+                    },
+                    scales: {
+                        y: {
+                            beginAtZero: true,
+                            max: 100,
+                            ticks: {
+                                callback: (value) => `${value}%`,
+                            },
+                        },
+                    },
+                },
+            });
         },
 
         async saveSession() {
