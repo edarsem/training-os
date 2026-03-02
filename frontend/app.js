@@ -93,6 +93,7 @@ document.addEventListener('alpine:init', () => {
         isSessionModalOpen: false,
         sessionForm: { id: null, date: '', start_time: null, time_str: '', type: 'run', duration_minutes: 60, distance_km: null, elevation_gain_m: null, perceived_intensity: null, notes: '', strength_focuses: [] },
         isRefreshing: false,
+        isRecomputingTrainingLoad: false,
 
         isNoteModalOpen: false,
         noteForm: { date: '', note: '' },
@@ -463,6 +464,33 @@ document.addEventListener('alpine:init', () => {
             return `${this.formatKm(session.distance_km)} km`;
         },
 
+        formatTrainingLoad(value) {
+            const parsed = Number(value);
+            if (!Number.isFinite(parsed)) return '';
+            const roundedInt = Math.round(parsed);
+            if (Math.abs(parsed - roundedInt) < 0.05) {
+                return `${roundedInt}`;
+            }
+            return (Math.round(parsed * 10) / 10).toFixed(1);
+        },
+
+        formatSessionCompactTrainingLoad(session) {
+            if (!session || session.training_load === null || session.training_load === undefined) {
+                return '';
+            }
+            const tl = this.formatTrainingLoad(session.training_load);
+            return tl ? `${tl} TL` : '';
+        },
+
+        formatSessionCompactDistanceAndLoad(session) {
+            const distance = this.formatSessionCompactDistance(session);
+            const trainingLoad = this.formatSessionCompactTrainingLoad(session);
+            if (distance && trainingLoad) {
+                return `${distance} | ${trainingLoad}`;
+            }
+            return distance || trainingLoad || '';
+        },
+
         formatPace(value) {
             const pace = Number(value);
             if (!Number.isFinite(pace) || pace <= 0) return '';
@@ -659,6 +687,28 @@ document.addEventListener('alpine:init', () => {
                 console.error('Failed to refresh Strava activities', e);
             } finally {
                 this.isRefreshing = false;
+            }
+        },
+
+        async recomputeAllTrainingLoad() {
+            if (this.isRecomputingTrainingLoad) return;
+            this.isRecomputingTrainingLoad = true;
+            try {
+                const res = await fetch(`${API_BASE}/training-load/recompute-all`, {
+                    method: 'POST'
+                });
+                const data = await res.json();
+                if (!res.ok) {
+                    const detail = data?.detail || 'Training load recompute failed';
+                    console.error('Training load recompute failed:', detail);
+                    return;
+                }
+                await this.fetchData();
+                console.log('Training load recompute done', data);
+            } catch (e) {
+                console.error('Failed to recompute training load', e);
+            } finally {
+                this.isRecomputingTrainingLoad = false;
             }
         },
 

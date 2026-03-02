@@ -130,6 +130,9 @@
                         <button @click="refreshFromStrava()" :disabled="isRefreshing" class="px-4 py-2 bg-white border rounded-full shadow-sm hover:bg-gray-50 text-sm font-medium disabled:opacity-50">
                             <span x-text="isRefreshing ? 'Refreshing…' : '⟳ Refresh Strava'"></span>
                         </button>
+                        <button @click="recomputeAllTrainingLoad()" :disabled="isRecomputingTrainingLoad" class="px-4 py-2 bg-white border rounded-full shadow-sm hover:bg-gray-50 text-sm font-medium disabled:opacity-50">
+                            <span x-text="isRecomputingTrainingLoad ? 'Recomputing…' : '⚙️ Recompute TL (dev)'"></span>
+                        </button>
                         <button @click="nextWeek()" class="w-32 px-4 py-2 bg-white border rounded-full shadow-sm hover:bg-gray-50 text-sm font-medium text-center">Next Week &rarr;</button>
                     </div>
                 </div>
@@ -163,7 +166,7 @@
                                             <span x-text="getTypeLabel(session.type)"></span>
                                             <span x-text="formatSessionCompactDuration(session)"></span>
                                         </div>
-                                        <div x-show="formatSessionCompactDistance(session)" class="text-base opacity-95 leading-snug" x-text="formatSessionCompactDistance(session)"></div>
+                                        <div x-show="formatSessionCompactDistanceAndLoad(session)" class="text-base opacity-95 leading-snug" x-text="formatSessionCompactDistanceAndLoad(session)"></div>
                                         <div x-show="getSessionNoteDisplay(session)" class="text-sm opacity-90 mt-1 whitespace-pre-line leading-snug clamp-3" x-text="getSessionNoteDisplay(session)"></div>
                                     </div>
                                 </template>
@@ -330,6 +333,7 @@
                             <div>Elapsed: <span class="font-medium" x-text="formatDuration(sessionForm.elapsed_duration_minutes || sessionForm.duration_minutes)"></span></div>
                             <div>Distance: <span class="font-medium" x-text="sessionForm.distance_km ? formatKm(sessionForm.distance_km) + ' km' : '—'"></span></div>
                             <div>Elevation: <span class="font-medium" x-text="sessionForm.elevation_gain_m ? sessionForm.elevation_gain_m + ' m' : '—'"></span></div>
+                            <div>Training load: <span class="font-medium" x-text="formatSessionCompactTrainingLoad(sessionForm) || '—'"></span></div>
                             <div>Avg pace: <span class="font-medium" x-text="formatPace(sessionForm.average_pace_min_per_km) || '—'"></span></div>
                             <div>HR avg/max: <span class="font-medium" x-text="formatHeartRate(sessionForm.average_heart_rate_bpm, sessionForm.max_heart_rate_bpm) || '—'"></span></div>
                         </div>
