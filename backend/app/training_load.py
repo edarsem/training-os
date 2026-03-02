@@ -62,6 +62,8 @@ def compute_training_load_series(
     start_date: date,
     end_date: date,
     config: TrainingLoadConfig,
+    initial_atl: float = 0.0,
+    initial_ctl: float = 0.0,
 ) -> dict[str, Any]:
     if end_date < start_date:
         raise ValueError("end_date must be greater than or equal to start_date")
@@ -71,8 +73,8 @@ def compute_training_load_series(
         sessions_by_day.setdefault(session.date, []).append(session)
 
     current = start_date
-    atl = 0.0
-    ctl = 0.0
+    atl = float(initial_atl)
+    ctl = float(initial_ctl)
     daily_points: list[dict[str, Any]] = []
 
     while current <= end_date:

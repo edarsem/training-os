@@ -12,6 +12,7 @@ from app.core.training_load_defaults import (
 from app.core.strava import StravaAPIError, StravaClient, StravaConfigError
 from app.llm.service import LLMConfigurationError, LLMProviderError, TrainingOSLLMService
 from app.training_load import TrainingLoadConfig, compute_training_load_series
+from app.training_load_recompute import recompute_training_load_from_date, recompute_training_load_full_history
 from app.models import models
 from app.schemas import schemas
 from app.crud import crud
@@ -268,6 +269,17 @@ def _upsert_strava_activities(
         )
 
     return imported_count, updated_count, skipped_count, items
+
+
+def _get_oldest_imported_session_date(items: List[schemas.StravaImportItemResponse]) -> date | None:
+    imported_dates = [
+        item.session_date
+        for item in items
+        if item.action == "imported" and item.session_date is not None
+    ]
+    if not imported_dates:
+        return None
+    return min(imported_dates)
 
 # --- Sessions ---
 @router.get("/sessions", response_model=List[schemas.SessionResponse])
@@ -555,6 +567,11 @@ def import_recent_strava_activities(
         activities=page_data.get("activities", []),
     )
 
+    recompute_result = None
+    oldest_new_date = _get_oldest_imported_session_date(items)
+    if oldest_new_date is not None:
+        recompute_result = recompute_training_load_from_date(db, oldest_new_date)
+
     db.commit()
 
     return schemas.StravaImportResponse(
@@ -566,6 +583,10 @@ def import_recent_strava_activities(
         updated_count=updated_count,
         skipped_count=skipped_count,
         auto_refreshed_token=bool(page_data.get("auto_refreshed_token", False)),
+        training_load_recomputed_from=(recompute_result.recomputed_from_date if recompute_result else None),
+        training_load_recomputed_to=(recompute_result.recomputed_to_date if recompute_result else None),
+        training_load_days_recomputed=(recompute_result.days_recomputed if recompute_result else 0),
+        training_load_sessions_updated=(recompute_result.sessions_updated if recompute_result else 0),
         items=items,
     )
 
@@ -623,6 +644,12 @@ def refresh_strava_activities_until_known(
         threshold_hr_bpm=threshold_hr_bpm,
         activities=all_new_activities,
     )
+
+    recompute_result = None
+    oldest_new_date = _get_oldest_imported_session_date(items)
+    if oldest_new_date is not None:
+        recompute_result = recompute_training_load_from_date(db, oldest_new_date)
+
     db.commit()
 
     return schemas.StravaImportResponse(
@@ -634,6 +661,10 @@ def refresh_strava_activities_until_known(
         updated_count=updated_count,
         skipped_count=skipped_count,
         auto_refreshed_token=auto_refreshed_any,
+        training_load_recomputed_from=(recompute_result.recomputed_from_date if recompute_result else None),
+        training_load_recomputed_to=(recompute_result.recomputed_to_date if recompute_result else None),
+        training_load_days_recomputed=(recompute_result.days_recomputed if recompute_result else 0),
+        training_load_sessions_updated=(recompute_result.sessions_updated if recompute_result else 0),
         items=items,
     )
 
@@ -681,6 +712,12 @@ def backfill_strava_activities(
         threshold_hr_bpm=threshold_hr_bpm,
         activities=all_activities,
     )
+
+    recompute_result = None
+    oldest_new_date = _get_oldest_imported_session_date(items)
+    if oldest_new_date is not None:
+        recompute_result = recompute_training_load_from_date(db, oldest_new_date)
+
     db.commit()
 
     return schemas.StravaImportResponse(
@@ -692,7 +729,29 @@ def backfill_strava_activities(
         updated_count=updated_count,
         skipped_count=skipped_count,
         auto_refreshed_token=auto_refreshed_any,
+        training_load_recomputed_from=(recompute_result.recomputed_from_date if recompute_result else None),
+        training_load_recomputed_to=(recompute_result.recomputed_to_date if recompute_result else None),
+        training_load_days_recomputed=(recompute_result.days_recomputed if recompute_result else 0),
+        training_load_sessions_updated=(recompute_result.sessions_updated if recompute_result else 0),
         items=items,
+    )
+
+
+@router.post("/training-load/recompute-all", response_model=schemas.TrainingLoadRecomputeResponse)
+def recompute_all_training_load(db: Session = Depends(get_db)):
+    try:
+        result = recompute_training_load_full_history(db)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    return schemas.TrainingLoadRecomputeResponse(
+        recomputed_from_date=result.recomputed_from_date,
+        recomputed_to_date=result.recomputed_to_date,
+        days_recomputed=result.days_recomputed,
+        sessions_updated=result.sessions_updated,
+        current_atl=result.current_atl,
+        current_ctl=result.current_ctl,
+        current_acwr=result.current_acwr,
     )
 
 

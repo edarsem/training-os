@@ -174,7 +174,21 @@ class StravaImportResponse(BaseModel):
     updated_count: int
     skipped_count: int
     auto_refreshed_token: bool
+    training_load_recomputed_from: Optional[date] = None
+    training_load_recomputed_to: Optional[date] = None
+    training_load_days_recomputed: int = 0
+    training_load_sessions_updated: int = 0
     items: List[StravaImportItemResponse] = []
+
+
+class TrainingLoadRecomputeResponse(BaseModel):
+    recomputed_from_date: Optional[date] = None
+    recomputed_to_date: Optional[date] = None
+    days_recomputed: int = 0
+    sessions_updated: int = 0
+    current_atl: float = 0.0
+    current_ctl: float = 0.0
+    current_acwr: Optional[float] = None
 
 
 class LLMContextLevel(str, Enum):
