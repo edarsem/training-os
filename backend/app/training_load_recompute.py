@@ -5,11 +5,9 @@ from datetime import date, timedelta
 
 from sqlalchemy.orm import Session
 
-from app.core.config import settings
 from app.core.training_load_defaults import (
     DEFAULT_TRAINING_LOAD_ATL_DAYS,
     DEFAULT_TRAINING_LOAD_CTL_DAYS,
-    DEFAULT_TRAINING_LOAD_ZONE_COEFFICIENTS,
 )
 from app.crud import crud
 from app.models import models
@@ -28,13 +26,7 @@ class TrainingLoadRecomputeResult:
 
 
 def _build_training_load_config() -> TrainingLoadConfig:
-    threshold_hr = settings.TRAINING_LOAD_THRESHOLD_HR_BPM
-    if threshold_hr is None:
-        raise ValueError("TRAINING_LOAD_THRESHOLD_HR_BPM is missing. Set it in your .env file.")
-
     return TrainingLoadConfig(
-        threshold_hr=float(threshold_hr),
-        zone_coefficients=list(DEFAULT_TRAINING_LOAD_ZONE_COEFFICIENTS),
         atl_time_constant_days=float(DEFAULT_TRAINING_LOAD_ATL_DAYS),
         ctl_time_constant_days=float(DEFAULT_TRAINING_LOAD_CTL_DAYS),
     )
@@ -81,12 +73,10 @@ def recompute_training_load_from_date(
             initial_ctl = float(previous_state.ctl or 0.0)
 
     sessions = crud.get_sessions_by_date_range(db, effective_start, last_session_date)
-    session_ids = [int(session.id) for session in sessions if session.id is not None]
-    zone_map = crud.get_session_hr_zone_time_map(db, session_ids)
 
     computed = compute_training_load_series(
         sessions=sessions,
-        session_zone_time_map=zone_map,
+        session_zone_time_map={},
         start_date=effective_start,
         end_date=last_session_date,
         config=config,
