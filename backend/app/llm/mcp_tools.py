@@ -27,12 +27,6 @@ def _truncate_text(value: str | None, max_chars: int = 220) -> str | None:
     return text[: max_chars - 1].rstrip() + "…"
 
 
-def _safe_per_7_days(total: float, number_of_days: int) -> float:
-    if number_of_days <= 0:
-        return 0.0
-    return round((float(total) * 7.0) / float(number_of_days), 2)
-
-
 def _format_duration_hours(total_minutes: int) -> str:
     minutes = int(total_minutes or 0)
     hours = minutes // 60
@@ -80,6 +74,32 @@ def _parse_include_sessions_mode(include_sessions: Any) -> tuple[str, float | No
     return "none", None
 
 
+def _fmt_metric(value: Any, digits: int = 0) -> str:
+    numeric = _to_float_or_none(value)
+    if numeric is None:
+        return "n/a"
+    return f"{numeric:.{max(0, int(digits))}f}"
+
+
+def _fmt_distance_km(value: Any, *, session_type: str | None = None) -> str:
+    numeric = _to_float_or_none(value)
+    if numeric is None:
+        return "n/a"
+    normalized_type = str(session_type or "").strip().lower()
+    if normalized_type == "bike":
+        return f"{numeric:.0f}"
+    if normalized_type in {"run", "trail"}:
+        return f"{numeric:.1f}"
+    return f"{numeric:.1f}"
+
+
+def _fmt_elevation_m(value: Any) -> str:
+    numeric = _to_float_or_none(value)
+    if numeric is None:
+        return "n/a"
+    return f"{numeric:.0f}"
+
+
 def _filter_salient_sessions(sessions: list[Any], include_sessions: Any) -> tuple[list[Any], dict[str, Any]]:
     mode, threshold = _parse_include_sessions_mode(include_sessions)
     if mode == "none":
@@ -95,71 +115,42 @@ def _filter_salient_sessions(sessions: list[Any], include_sessions: Any) -> tupl
     return selected, {"mode": "threshold", "threshold": float(threshold or 0.0), "returned": len(selected)}
 
 
-def _compute_load_context(
-    db: DBSession,
-    *,
-    start_date: date,
-    end_date: date,
-) -> dict[str, Any]:
-    points = crud.get_daily_training_load_by_date_range(db, start_date, end_date)
+def _compute_shape_snapshot(db: DBSession, *, on_date: date) -> dict[str, Any]:
+    points = crud.get_daily_training_load_by_date_range(db, on_date, on_date)
     if not points:
-        return {
-            "period_load": 0.0,
-            "shape_ctl": None,
-            "stress_atl": None,
-            "acwr": None,
-            "trend_atl_minus_ctl": None,
-            "shape_change_ctl": None,
-            "reference": (
-                "Reference: Shape≈CTL (long-term fitness), Trend≈ATL-CTL "
-                "(short-term fatigue balance), Stress≈ACWR (acute/chronic load ratio)."
-            ),
-        }
+        return {"date": on_date.isoformat(), "shape_ctl": None, "acwr": None}
 
-    first = points[0]
-    last = points[-1]
-    shape_ctl = _to_float_or_none(getattr(last, "ctl", None))
-    stress_atl = _to_float_or_none(getattr(last, "atl", None))
-    acwr = _to_float_or_none(getattr(last, "acwr", None))
-    trend = None
-    if shape_ctl is not None and stress_atl is not None:
-        trend = round(stress_atl - shape_ctl, 2)
-
-    start_ctl = _to_float_or_none(getattr(first, "ctl", None))
-    shape_change = None
-    if start_ctl is not None and shape_ctl is not None:
-        shape_change = round(shape_ctl - start_ctl, 2)
-
+    point = points[-1]
+    shape_ctl = _to_float_or_none(getattr(point, "ctl", None))
+    acwr = _to_float_or_none(getattr(point, "acwr", None))
     return {
-        "period_load": round(sum((_to_float_or_none(getattr(point, "load", None)) or 0.0) for point in points), 1),
-        "shape_ctl": round(shape_ctl, 2) if shape_ctl is not None else None,
-        "stress_atl": round(stress_atl, 2) if stress_atl is not None else None,
-        "acwr": round(acwr, 3) if acwr is not None else None,
-        "trend_atl_minus_ctl": trend,
-        "shape_change_ctl": shape_change,
-        "reference": (
-            "Reference: Shape≈CTL (long-term fitness), Trend≈ATL-CTL "
-            "(short-term fatigue balance), Stress≈ACWR (acute/chronic load ratio)."
-        ),
+        "date": on_date.isoformat(),
+        "shape_ctl": round(shape_ctl, 0) if shape_ctl is not None else None,
+        "acwr": round(acwr, 0) if acwr is not None else None,
     }
+
+
+def _compute_avg_acwr(db: DBSession, *, start_date: date, end_date: date) -> float | None:
+    points = crud.get_daily_training_load_by_date_range(db, start_date, end_date)
+    acwrs = [_to_float_or_none(getattr(point, "acwr", None)) for point in points]
+    values = [value for value in acwrs if value is not None]
+    if not values:
+        return None
+    return round(sum(values) / len(values), 0)
 
 
 def _render_week_summary_text(payload: dict[str, Any]) -> str:
     totals = payload.get("totals", {})
-    load = payload.get("training_load", {})
+    week_shape = payload.get("week_shape", {})
     lines = [
         f"{payload.get('date_start')} to {payload.get('date_end')} week summary:",
         (
-            f"Week load: {load.get('period_load', 0)} TL. "
-            f"Shape (CTL): {load.get('shape_ctl')}, Stress (ATL): {load.get('stress_atl')}, "
-            f"Trend (ATL-CTL): {load.get('trend_atl_minus_ctl')}, Stress ratio (ACWR): {load.get('acwr')}."
+            f"Week starts with Shape (CTL): {_fmt_metric(week_shape.get('shape_ctl'), 0)}. "
+            f"(Snapshot date: {week_shape.get('date')})."
         ),
     ]
-
-    lines.append(str(load.get("reference") or ""))
-    lines.append(
-        f"Context (secondary): {totals.get('total_distance_km', 0)} km, {totals.get('total_elevation_gain_m', 0)} m+, {totals.get('total_sessions', 0)} sessions."
-    )
+    lines.append("Reference: Shape = CTL (long-term fitness).")
+    lines.append(f"Secondary context: {totals.get('total_sessions', 0)} sessions.")
 
     plan = payload.get("plan") or {}
     lines.append(f"Week plan: {plan.get('description') or 'None'}")
@@ -176,7 +167,7 @@ def _render_week_summary_text(payload: dict[str, Any]) -> str:
         mode = salient_meta.get("mode")
         threshold = salient_meta.get("threshold")
         if mode == "threshold":
-            lines.append(f"Salient sessions (TL ≥ {threshold}):")
+            lines.append(f"Salient sessions (TL ≥ {_fmt_metric(threshold, 0)}):")
         else:
             lines.append("Sessions:")
         for item in sessions:
@@ -185,31 +176,36 @@ def _render_week_summary_text(payload: dict[str, Any]) -> str:
             elev = item.get("elevation_gain_m")
             base = (
                 f"{_day_label(session_date)} the {_ordinal_day(session_date)}, "
-                f"{item.get('type')} TL {item.get('training_load') or 0}, "
+                f"{item.get('type')} TL {_fmt_metric(item.get('training_load'), 0)}, "
                 f"{_format_duration_hours(int(item.get('moving_duration_minutes') or item.get('duration_minutes') or 0))}"
             )
             if distance:
-                base += f", {distance} km"
+                base += f", {_fmt_distance_km(distance, session_type=item.get('type'))} km"
             if elev:
-                base += f", {elev} m+"
+                base += f", {_fmt_elevation_m(elev)} m+"
             lines.append(base)
             if item.get("notes"):
                 lines.append(f"note: {item.get('notes')}")
     elif salient_meta.get("mode") == "threshold":
-        lines.append(f"Salient sessions (TL ≥ {salient_meta.get('threshold')}): none")
+        lines.append(f"Salient sessions (TL ≥ {_fmt_metric(salient_meta.get('threshold'), 0)}): none")
 
     return "\n".join(lines)
 
 
 def _render_day_details_text(payload: dict[str, Any]) -> str:
     totals = payload.get("totals", {})
+    day_shape = payload.get("day_shape", {})
     lines = [
         f"{payload.get('date')} day details:",
+        (
+            f"Shape (CTL): {_fmt_metric(day_shape.get('shape_ctl'))}, Stress ratio (ACWR): {_fmt_metric(day_shape.get('acwr'), 0)} "
+            f"(snapshot date: {day_shape.get('date')})."
+        ),
         (
             f"{totals.get('total_sessions', 0)} sessions, "
             f"{_format_duration_hours(int(totals.get('total_duration_minutes') or 0))} total "
             f"({_format_duration_hours(int(totals.get('total_moving_minutes') or 0))} moving), "
-            f"{totals.get('total_distance_km', 0)} km, {totals.get('total_elevation_gain_m', 0)} m+"
+            f"{_fmt_distance_km(totals.get('total_distance_km', 0), session_type='run')} km, {_fmt_elevation_m(totals.get('total_elevation_gain_m', 0))} m+"
         ),
     ]
     day_note = payload.get("day_note")
@@ -222,9 +218,9 @@ def _render_day_details_text(payload: dict[str, Any]) -> str:
         for item in sessions:
             base = f"- {item.get('type')} #{item.get('id')}: {_format_duration_hours(int(item.get('moving_duration_minutes') or item.get('duration_minutes') or 0))}"
             if item.get("distance_km"):
-                base += f", {item.get('distance_km')} km"
+                base += f", {_fmt_distance_km(item.get('distance_km'), session_type=item.get('type'))} km"
             if item.get("elevation_gain_m"):
-                base += f", {item.get('elevation_gain_m')} m+"
+                base += f", {_fmt_elevation_m(item.get('elevation_gain_m'))} m+"
             lines.append(base)
             if item.get("notes"):
                 lines.append(f"  note: {item.get('notes')}")
@@ -242,9 +238,9 @@ def _render_session_details_text(payload: dict[str, Any]) -> str:
         f"Elapsed: {_format_duration_hours(int(payload.get('elapsed_duration_minutes') or payload.get('duration_minutes') or 0))}",
     ]
     if payload.get("distance_km"):
-        lines.append(f"Distance: {payload.get('distance_km')} km")
+        lines.append(f"Distance: {_fmt_distance_km(payload.get('distance_km'), session_type=payload.get('type'))} km")
     if payload.get("elevation_gain_m"):
-        lines.append(f"Elevation: {payload.get('elevation_gain_m')} m+")
+        lines.append(f"Elevation: {_fmt_elevation_m(payload.get('elevation_gain_m'))} m+")
     if payload.get("average_pace_min_per_km"):
         lines.append(f"Avg pace: {payload.get('average_pace_min_per_km')} min/km")
     if payload.get("average_heart_rate_bpm"):
@@ -260,15 +256,15 @@ def _render_session_details_text(payload: dict[str, Any]) -> str:
 
 
 def _render_block_summary_text(payload: dict[str, Any]) -> str:
-    load = payload.get("training_load", {})
+    shape = payload.get("shape_summary", {})
     lines = [
         f"Block summary {payload.get('date_start')} to {payload.get('date_end')}:",
         (
-            f"Block load: {load.get('period_load', 0)} TL over {payload.get('number_of_days', 0)} days. "
-            f"Shape (CTL): {load.get('shape_ctl')}, Stress (ATL): {load.get('stress_atl')}, "
-            f"Trend (ATL-CTL): {load.get('trend_atl_minus_ctl')}, ACWR: {load.get('acwr')}."
+            f"Shape (CTL) start→end: {_fmt_metric(shape.get('shape_ctl_start'))} → {_fmt_metric(shape.get('shape_ctl_end'))} "
+            f"(Δ {_fmt_metric(shape.get('shape_change_ctl'))})."
         ),
-        str(load.get("reference") or ""),
+        f"Average Stress ratio (ACWR) across block: {_fmt_metric(shape.get('avg_acwr'), 0)}",
+        "Reference: Shape = CTL (long-term fitness), Stress ratio = ACWR.",
     ]
 
     lines.append(
@@ -278,19 +274,19 @@ def _render_block_summary_text(payload: dict[str, Any]) -> str:
     salient_sessions = payload.get("salient_sessions") or []
     salient_meta = payload.get("salient_sessions_meta") or {}
     if salient_meta.get("mode") == "threshold":
-        lines.append(f"Salient sessions (TL ≥ {salient_meta.get('threshold')}):")
+        lines.append(f"Salient sessions (TL ≥ {_fmt_metric(salient_meta.get('threshold'), 0)}):")
     elif salient_meta.get("mode") == "all":
         lines.append("Sessions:")
 
     for item in salient_sessions:
         line = (
-            f"- {item.get('date')} {item.get('type')} TL {item.get('training_load') or 0}, "
+            f"- {item.get('date')} {item.get('type')} TL {_fmt_metric(item.get('training_load'), 0)}, "
             f"{_format_duration_hours(int(item.get('moving_duration_minutes') or item.get('duration_minutes') or 0))}"
         )
         if item.get("distance_km"):
-            line += f", {item.get('distance_km')} km"
+            line += f", {_fmt_distance_km(item.get('distance_km'), session_type=item.get('type'))} km"
         if item.get("elevation_gain_m"):
-            line += f", {item.get('elevation_gain_m')} m+"
+            line += f", {_fmt_elevation_m(item.get('elevation_gain_m'))} m+"
         line += f" [session #{item.get('id')}]"
         lines.append(line)
 
@@ -299,11 +295,10 @@ def _render_block_summary_text(payload: dict[str, Any]) -> str:
 
     weekly_breakdown = payload.get("weekly_breakdown") or []
     if weekly_breakdown:
-        lines.append("Weekly load trend:")
+        lines.append("Weekly Shape trend:")
         for item in weekly_breakdown:
             line = (
-                f"- Week of {item.get('week_start')}: {item.get('training_load', 0)} TL, "
-                f"CTL {item.get('shape_ctl')}, ATL {item.get('stress_atl')}, ACWR {item.get('acwr')}"
+                f"- Week of {item.get('week_start')}: Shape (CTL) {_fmt_metric(item.get('shape_ctl'))}"
             )
             lines.append(line)
 
@@ -317,58 +312,55 @@ def _render_recent_weeks_summary_text(payload: dict[str, Any]) -> str:
     for item in reversed(weeks):
         line = (
             f"Week of {_month_day_label(date.fromisoformat(str(item.get('week_start'))))}: "
-            f"{item.get('training_load', 0)} TL, CTL {item.get('shape_ctl')}, "
-            f"ATL {item.get('stress_atl')}, Trend {item.get('trend_atl_minus_ctl')}, ACWR {item.get('acwr')}."
+            f"Shape (CTL) {_fmt_metric(item.get('shape_ctl'), 0)}."
         )
         salient = item.get("salient_sessions") or []
         threshold = item.get("salient_threshold")
         if threshold is not None:
-            line += f" Salient (TL ≥ {threshold}): {len(salient)}"
+            line += f" Salient (TL ≥ {_fmt_metric(threshold, 0)}): {len(salient)}"
         if salient:
             top = salient[0]
             line += (
-                f". Top salient: {top.get('weekday')}, {top.get('type')} TL {top.get('training_load') or 0} "
+                f". Top salient: {top.get('weekday')}, {top.get('type')} TL {_fmt_metric(top.get('training_load'), 0)} "
                 f"[session #{top.get('session_id')}]"
             )
         lines.append(line)
-    load_reference = payload.get("load_reference")
-    if load_reference:
-        lines.append(str(load_reference))
+    lines.append("Reference: Shape = CTL (long-term fitness).")
     if now_iso:
         try:
             today = date.fromisoformat(str(now_iso))
-            lines[-1] += f" We are {_day_label(today)} of this week."
+            lines.append(f"We are {_day_label(today)} of this week.")
         except ValueError:
             pass
     return "\n".join(lines)
 
 
 def _render_salient_sessions_text(payload: dict[str, Any]) -> str:
-    threshold = payload.get("training_load_threshold")
+    threshold = payload.get("effective_training_load_threshold")
+    returned_count = int(payload.get("returned_count") or 0)
     lines = [
         (
-            f"Salient sessions from {payload.get('date_start')} to {payload.get('date_end')} "
-            f"(TL ≥ {threshold}): {payload.get('total', 0)}"
+            f"{returned_count} Salient sessions from {payload.get('date_start')} to {payload.get('date_end')} "
+            f"with TL ≥ {_fmt_metric(threshold, 0)}"
         )
     ]
 
-    load = payload.get("training_load", {})
+    shape = payload.get("shape_summary", {})
     lines.append(
-        f"Period load: {load.get('period_load', 0)} TL | Shape (CTL): {load.get('shape_ctl')} | "
-        f"Stress (ATL): {load.get('stress_atl')} | Trend (ATL-CTL): {load.get('trend_atl_minus_ctl')} | ACWR: {load.get('acwr')}"
+        f"Shape (CTL) start→end: {_fmt_metric(shape.get('shape_ctl_start'))} → {_fmt_metric(shape.get('shape_ctl_end'))} | "
+        f"Average Stress ratio (ACWR): {_fmt_metric(shape.get('avg_acwr'), 0)}"
     )
-    if load.get("reference"):
-        lines.append(str(load.get("reference")))
+    lines.append("Reference: Shape = CTL (long-term fitness), Stress ratio = ACWR.")
 
     for item in payload.get("sessions") or []:
         line = (
-            f"- {item.get('date')} {item.get('type')} TL {item.get('training_load') or 0}, "
+            f"- {item.get('date')} {item.get('type')} TL {_fmt_metric(item.get('training_load'), 0)}, "
             f"{_format_duration_hours(int(item.get('moving_duration_minutes') or item.get('duration_minutes') or 0))}"
         )
         if item.get("distance_km"):
-            line += f", {item.get('distance_km')} km"
+            line += f", {_fmt_distance_km(item.get('distance_km'), session_type=item.get('type'))} km"
         if item.get("elevation_gain_m"):
-            line += f", {item.get('elevation_gain_m')} m+"
+            line += f", {_fmt_elevation_m(item.get('elevation_gain_m'))} m+"
         line += f" [session #{item.get('id')}]"
         lines.append(line)
 
@@ -566,14 +558,12 @@ def get_week_summary_tool(
     total_duration = int(sum((s.duration_minutes or 0) for s in sessions))
     total_distance = round(sum((s.distance_km or 0) for s in sessions if s.type in ["run", "trail"]), 1)
     total_elevation = int(sum((s.elevation_gain_m or 0) for s in sessions if s.type in ["run", "trail", "hike"]))
-    total_training_load = round(sum((_to_float_or_none(s.training_load) or 0.0) for s in sessions), 1)
-    load_context = _compute_load_context(db, start_date=start_date, end_date=end_date)
-    load_context["period_load"] = total_training_load
+    week_shape = _compute_shape_snapshot(db, on_date=start_date)
 
     payload: dict[str, Any] = {
         "date_start": start_date.isoformat(),
         "date_end": end_date.isoformat(),
-        "training_load": load_context,
+        "week_shape": week_shape,
         "totals": {
             "total_sessions": len(sessions),
             "total_duration_minutes": total_duration,
@@ -603,7 +593,7 @@ def get_week_summary_tool(
                 "date": s.date.isoformat(),
                 "id": s.id,
                 "type": s.type,
-                "training_load": round(_to_float_or_none(s.training_load) or 0.0, 1),
+                "training_load": round(_to_float_or_none(s.training_load) or 0.0, 0),
                 "moving_duration_minutes": s.moving_duration_minutes,
                 "duration_minutes": s.duration_minutes,
                 "distance_km": s.distance_km,
@@ -636,6 +626,7 @@ def get_day_details_tool(
 
     payload = {
         "date": target_date.isoformat(),
+        "day_shape": _compute_shape_snapshot(db, on_date=target_date),
         "day_note": day_note.note if day_note else None,
         "totals": {
             "total_sessions": len(sessions),
@@ -729,9 +720,9 @@ def get_block_summary_tool(
     active_training_days = len({s.date for s in sessions})
     noted_days = len({n.date for n in day_notes})
 
-    total_training_load = round(sum((_to_float_or_none(s.training_load) or 0.0) for s in sessions), 1)
-    load_context = _compute_load_context(db, start_date=start_date, end_date=end_date)
-    load_context["period_load"] = total_training_load
+    start_shape = _compute_shape_snapshot(db, on_date=start_date)
+    end_shape = _compute_shape_snapshot(db, on_date=end_date)
+    avg_acwr = _compute_avg_acwr(db, start_date=start_date, end_date=end_date)
 
     first_week_start = start_date - timedelta(days=start_date.weekday())
     last_week_start = end_date - timedelta(days=end_date.weekday())
@@ -741,16 +732,13 @@ def get_block_summary_tool(
         window_start = max(cursor, start_date)
         window_end = min(cursor + timedelta(days=6), end_date)
         week_sessions = [s for s in sessions if window_start <= s.date <= window_end]
-        week_load_context = _compute_load_context(db, start_date=window_start, end_date=window_end)
+        week_shape = _compute_shape_snapshot(db, on_date=window_start)
 
         weekly_breakdown.append(
             {
                 "week_start": cursor.isoformat(),
                 "week_end": (cursor + timedelta(days=6)).isoformat(),
-                "training_load": round(sum((_to_float_or_none(s.training_load) or 0.0) for s in week_sessions), 1),
-                "shape_ctl": week_load_context.get("shape_ctl"),
-                "stress_atl": week_load_context.get("stress_atl"),
-                "acwr": week_load_context.get("acwr"),
+                "shape_ctl": week_shape.get("shape_ctl"),
             }
         )
         cursor = cursor + timedelta(days=7)
@@ -760,7 +748,16 @@ def get_block_summary_tool(
     payload = {
         "date_start": start_date.isoformat(),
         "date_end": end_date.isoformat(),
-        "training_load": load_context,
+        "shape_summary": {
+            "shape_ctl_start": start_shape.get("shape_ctl"),
+            "shape_ctl_end": end_shape.get("shape_ctl"),
+            "shape_change_ctl": (
+                round(float(end_shape.get("shape_ctl")) - float(start_shape.get("shape_ctl")), 2)
+                if start_shape.get("shape_ctl") is not None and end_shape.get("shape_ctl") is not None
+                else None
+            ),
+            "avg_acwr": avg_acwr,
+        },
         "number_of_days": number_of_days,
         "active_training_days": active_training_days,
         "days_with_notes": noted_days,
@@ -772,7 +769,7 @@ def get_block_summary_tool(
                 "id": s.id,
                 "date": s.date.isoformat(),
                 "type": s.type,
-                "training_load": round(_to_float_or_none(s.training_load) or 0.0, 1),
+                "training_load": round(_to_float_or_none(s.training_load) or 0.0, 0),
                 "moving_duration_minutes": s.moving_duration_minutes,
                 "duration_minutes": s.duration_minutes,
                 "distance_km": s.distance_km,
@@ -809,8 +806,7 @@ def get_recent_weeks_summary_tool(
         week_end = week_start + timedelta(days=6)
         effective_end = min(week_end, now_date)
         week_sessions = crud.get_sessions_by_date_range(db, week_start, effective_end)
-        load_context = _compute_load_context(db, start_date=week_start, end_date=effective_end)
-        total_training_load = round(sum((_to_float_or_none(s.training_load) or 0.0) for s in week_sessions), 1)
+        week_shape = _compute_shape_snapshot(db, on_date=week_start)
         selected_sessions, salient_meta = _filter_salient_sessions(week_sessions, include_sessions)
         threshold = salient_meta.get("threshold") if salient_meta.get("mode") == "threshold" else None
 
@@ -819,11 +815,7 @@ def get_recent_weeks_summary_tool(
                 "week_start": week_start.isoformat(),
                 "week_end": week_end.isoformat(),
                 "effective_end": effective_end.isoformat(),
-                "training_load": total_training_load,
-                "shape_ctl": load_context.get("shape_ctl"),
-                "stress_atl": load_context.get("stress_atl"),
-                "trend_atl_minus_ctl": load_context.get("trend_atl_minus_ctl"),
-                "acwr": load_context.get("acwr"),
+                "shape_ctl": week_shape.get("shape_ctl"),
                 "salient_threshold": threshold,
                 "salient_sessions": [
                     {
@@ -831,7 +823,7 @@ def get_recent_weeks_summary_tool(
                         "date": s.date.isoformat(),
                         "weekday": _day_label(s.date),
                         "type": s.type,
-                        "training_load": round(_to_float_or_none(s.training_load) or 0.0, 1),
+                        "training_load": round(_to_float_or_none(s.training_load) or 0.0, 0),
                     }
                     for s in selected_sessions
                 ],
@@ -842,10 +834,6 @@ def get_recent_weeks_summary_tool(
         "now_iso_date": now_date.isoformat(),
         "weeks_count": count,
         "weeks": weeks,
-        "load_reference": (
-            "Reference: Shape≈CTL (long-term fitness), Trend≈ATL-CTL "
-            "(short-term fatigue balance), Stress≈ACWR (acute/chronic load ratio)."
-        ),
     }
 
     if output_mode == "json":
@@ -874,28 +862,46 @@ def get_salient_sessions_tool(
     salient = [s for s in sessions if (_to_float_or_none(s.training_load) or 0.0) >= threshold]
     salient.sort(key=lambda s: (_to_float_or_none(s.training_load) or 0.0, s.date, s.id or 0), reverse=True)
 
-    capped = salient[: max(1, min(int(limit), 200))]
-    load_context = _compute_load_context(db, start_date=start_date, end_date=end_date)
-    load_context["period_load"] = round(sum((_to_float_or_none(s.training_load) or 0.0) for s in sessions), 1)
+    effective_limit = max(1, min(int(limit), 200))
+    capped = salient[:effective_limit]
+    is_truncated = len(salient) > len(capped)
+    effective_threshold = threshold
+    if capped and is_truncated:
+        effective_threshold = min((_to_float_or_none(s.training_load) or 0.0) for s in capped)
+
+    capped_display = sorted(
+        capped,
+        key=lambda s: (s.date, s.start_time.isoformat() if s.start_time else "", s.id or 0),
+    )
+    start_shape = _compute_shape_snapshot(db, on_date=start_date)
+    end_shape = _compute_shape_snapshot(db, on_date=end_date)
+    avg_acwr = _compute_avg_acwr(db, start_date=start_date, end_date=end_date)
 
     payload = {
         "date_start": start_date.isoformat(),
         "date_end": end_date.isoformat(),
-        "training_load_threshold": threshold,
+        "training_load_threshold": round(threshold, 0),
+        "effective_training_load_threshold": round(effective_threshold, 0),
         "total": len(salient),
-        "training_load": load_context,
+        "returned_count": len(capped_display),
+        "limit_reached": is_truncated,
+        "shape_summary": {
+            "shape_ctl_start": start_shape.get("shape_ctl"),
+            "shape_ctl_end": end_shape.get("shape_ctl"),
+            "avg_acwr": avg_acwr,
+        },
         "sessions": [
             {
                 "id": s.id,
                 "date": s.date.isoformat(),
                 "type": s.type,
-                "training_load": round(_to_float_or_none(s.training_load) or 0.0, 1),
+                "training_load": round(_to_float_or_none(s.training_load) or 0.0, 0),
                 "moving_duration_minutes": s.moving_duration_minutes,
                 "duration_minutes": s.duration_minutes,
                 "distance_km": s.distance_km,
                 "elevation_gain_m": s.elevation_gain_m,
             }
-            for s in capped
+            for s in capped_display
         ],
     }
 
@@ -914,7 +920,7 @@ def get_mcp_tools_schema() -> list[dict[str, Any]]:
             "type": "function",
             "function": {
                 "name": "get_week_summary",
-                "description": "Get a TL-first overview of one week, including week load and compact Shape/Trend/Stress context. include_sessions accepts false (none), true (all), or a numeric TL threshold for salient sessions.",
+                "description": "Get a compact week summary centered on Shape (CTL at week start), with optional salient sessions. include_sessions accepts false (none), true (all), or a numeric TL threshold.",
                 "parameters": {
                     "type": "object",
                     "properties": {
@@ -972,7 +978,7 @@ def get_mcp_tools_schema() -> list[dict[str, Any]]:
             "type": "function",
             "function": {
                 "name": "get_block_summary",
-                "description": "Get a TL-first summary for a date range with compact Shape/Trend/Stress context and optional salient sessions. include_sessions accepts false (none), true (all), or numeric TL threshold.",
+                "description": "Get a compact block summary with Shape evolution (start/end CTL), average ACWR, and optional salient sessions. include_sessions accepts false (none), true (all), or numeric TL threshold.",
                 "parameters": {
                     "type": "object",
                     "properties": {
@@ -997,7 +1003,7 @@ def get_mcp_tools_schema() -> list[dict[str, Any]]:
             "type": "function",
             "function": {
                 "name": "get_recent_weeks_summary",
-                "description": "Get a recent weekly TL trend (oldest to newest) with compact Shape/Trend/Stress context and optional salient sessions by TL threshold.",
+                "description": "Get recent weeks from oldest to newest with weekly Shape (CTL) and optional salient sessions by TL threshold.",
                 "parameters": {
                     "type": "object",
                     "properties": {
@@ -1019,7 +1025,7 @@ def get_mcp_tools_schema() -> list[dict[str, Any]]:
             "type": "function",
             "function": {
                 "name": "get_salient_sessions",
-                "description": "List sessions in a date range that beat a TL threshold (default 150), with compact Shape/Trend/Stress context for the period.",
+                "description": "List sessions in a date range that beat a TL threshold (default 150), returned oldest to newest. If limit truncates results, reported threshold is the minimum TL among returned sessions.",
                 "parameters": {
                     "type": "object",
                     "properties": {
