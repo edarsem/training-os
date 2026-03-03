@@ -2,6 +2,7 @@ const API_BASE = 'http://localhost:8000/api';
 
 let charts = [];
 let isSyncingHover = false;
+let periodOffset = 0;
 
 function toIsoDate(date) {
   const year = date.getFullYear();
@@ -21,6 +22,11 @@ function formatDayLabel(isoDate) {
   return new Intl.DateTimeFormat('en-US', { month: 'short', day: 'numeric' }).format(d);
 }
 
+function formatPeriodSummary(startDate, endDate) {
+  const fmt = new Intl.DateTimeFormat('en-US', { month: 'short', day: 'numeric' });
+  return `${fmt.format(startDate)} → ${fmt.format(endDate)}`;
+}
+
 async function fetchTrainingLoad(startDate, endDate) {
   const params = new URLSearchParams({ start_date: startDate, end_date: endDate });
   const res = await fetch(`${API_BASE}/training-load?${params.toString()}`);
@@ -31,6 +37,11 @@ async function fetchTrainingLoad(startDate, endDate) {
 function registerChart(chart) {
   charts.push(chart);
   return chart;
+}
+
+function clearCharts() {
+  charts.forEach((chart) => chart.destroy());
+  charts = [];
 }
 
 function getActiveElementsForIndex(chart, index) {
@@ -58,7 +69,7 @@ function syncChartsAtIndex(sourceChart, index) {
   isSyncingHover = false;
 }
 
-function baseOptions({ yTickFormatter, tooltipFilter, pointStyle = 'circle' } = {}) {
+function baseOptions({ yTickFormatter, tooltipFilter, pointStyle = 'circle', beginAtZero = true } = {}) {
   return {
     responsive: true,
     maintainAspectRatio: false,
@@ -80,6 +91,10 @@ function baseOptions({ yTickFormatter, tooltipFilter, pointStyle = 'circle' } = 
           boxHeight: 10,
           usePointStyle: true,
           pointStyle,
+          filter: (item, data) => {
+            const dataset = data.datasets[item.datasetIndex];
+            return dataset.showInLegend !== false;
+          },
         },
       },
       tooltip: {
@@ -96,7 +111,7 @@ function baseOptions({ yTickFormatter, tooltipFilter, pointStyle = 'circle' } = 
         },
       },
       y: {
-        beginAtZero: true,
+        beginAtZero,
         ticks: yTickFormatter
           ? {
               callback: yTickFormatter,
@@ -107,41 +122,18 @@ function baseOptions({ yTickFormatter, tooltipFilter, pointStyle = 'circle' } = 
   };
 }
 
-function clearCharts() {
-  charts.forEach((chart) => chart.destroy());
-  charts = [];
-}
+function makeStressShapeChart(labels, daily) {
+  const canvas = document.getElementById('chart-stress-shape');
+  if (!canvas) return;
 
-function renderCharts(daily) {
-  clearCharts();
-
-  const labels = daily.map((point) => formatDayLabel(String(point.date)));
-
-  const dailyLoadChart = new Chart(document.getElementById('chart-daily-load').getContext('2d'), {
-    type: 'bar',
-    data: {
-      labels,
-      datasets: [
-        {
-          label: '⚡ Daily load',
-          data: daily.map((point) => Number(point.load || 0)),
-          backgroundColor: '#0ea5e9',
-          borderRadius: 3,
-        },
-      ],
-    },
-    options: baseOptions(),
-  });
-  registerChart(dailyLoadChart);
-
-  const trendStressChart = new Chart(document.getElementById('chart-trend-stress').getContext('2d'), {
+  registerChart(new Chart(canvas.getContext('2d'), {
     type: 'line',
     data: {
       labels,
       datasets: [
         {
-          label: '🔥 Stress',
-          data: daily.map((point) => Number(point.atl || 0)),
+          label: '🔥',
+          data: daily.map((point) => Math.round(Number(point.atl || 0))),
           borderColor: '#f97316',
           backgroundColor: '#f97316',
           tension: 0.2,
@@ -149,8 +141,8 @@ function renderCharts(daily) {
           pointRadius: 2,
         },
         {
-          label: '📈 Trend',
-          data: daily.map((point) => Number(point.ctl || 0)),
+          label: '🔋',
+          data: daily.map((point) => Math.round(Number(point.ctl || 0))),
           borderColor: '#3b82f6',
           backgroundColor: '#3b82f6',
           tension: 0.2,
@@ -159,21 +151,42 @@ function renderCharts(daily) {
         },
       ],
     },
-    options: baseOptions(),
-  });
-  registerChart(trendStressChart);
+    options: baseOptions({ beginAtZero: false }),
+  }));
+}
+
+function makeTrendChart(labels, daily) {
+  const canvas = document.getElementById('chart-trend');
+  if (!canvas) return;
 
   const thresholds = [50, 80, 100, 150];
-  const shapeChart = new Chart(document.getElementById('chart-shape-daily').getContext('2d'), {
+
+  registerChart(new Chart(canvas.getContext('2d'), {
     type: 'line',
     data: {
       labels,
       datasets: [
         {
-          label: '⚖️ Shape',
+          label: 'zone-high',
+          data: labels.map(() => 150),
+          borderWidth: 0,
+          pointRadius: 0,
+          showInLegend: false,
+        },
+        {
+          label: 'zone-low',
+          data: labels.map(() => 100),
+          borderWidth: 0,
+          pointRadius: 0,
+          showInLegend: false,
+          fill: '-1',
+          backgroundColor: 'rgba(124,58,237,0.10)',
+        },
+        {
+          label: '📈',
           data: daily.map((point) => {
             if (point.acwr === null || point.acwr === undefined) return null;
-            return Math.round(Number(point.acwr) * 1000) / 10;
+            return Math.round(Number(point.acwr) * 100);
           }),
           borderColor: '#7c3aed',
           backgroundColor: '#7c3aed',
@@ -182,66 +195,121 @@ function renderCharts(daily) {
           pointRadius: 2,
         },
         ...thresholds.map((threshold) => ({
-          label: `Guide ${threshold}%`,
+          label: '•',
           data: labels.map(() => threshold),
           borderColor: '#9ca3af',
           backgroundColor: '#9ca3af',
           borderDash: [5, 4],
           borderWidth: 1,
           pointRadius: 0,
+          showInLegend: false,
         })),
       ],
     },
     options: baseOptions({
-      yTickFormatter: (value) => `${value}%`,
-      tooltipFilter: (ctx) => ctx.datasetIndex === 0,
+      yTickFormatter: (value) => `${Math.round(Number(value) || 0)}%`,
+      tooltipFilter: (ctx) => ctx.datasetIndex === 2,
       pointStyle: 'line',
+      beginAtZero: false,
     }),
-  });
-  registerChart(shapeChart);
+  }));
 }
 
-function updateSummary(daily) {
+function makeDailyLoadChart(labels, daily) {
+  const canvas = document.getElementById('chart-daily-load');
+  if (!canvas) return;
+
+  registerChart(new Chart(canvas.getContext('2d'), {
+    type: 'bar',
+    data: {
+      labels,
+      datasets: [
+        {
+          label: '⚡',
+          data: daily.map((point) => Math.round(Number(point.load || 0))),
+          backgroundColor: '#0ea5e9',
+          borderRadius: 3,
+        },
+      ],
+    },
+    options: baseOptions(),
+  }));
+}
+
+function updateSummary(daily, startDate, endDate) {
   const summary = document.getElementById('summary');
+  if (!summary) return;
   if (!daily || daily.length === 0) {
-    summary.textContent = 'No data in selected range';
+    summary.textContent = `${formatPeriodSummary(startDate, endDate)} · No data`;
     return;
   }
+
   const last = daily[daily.length - 1];
-  const trend = Math.round(Number(last.ctl || 0));
   const stress = Math.round(Number(last.atl || 0));
-  const shape = last.acwr === null || last.acwr === undefined ? '—' : `${Math.round(Number(last.acwr) * 1000) / 10}%`;
-  summary.textContent = `Latest: 📈 Trend ${trend} · 🔥 Stress ${stress} · ⚖️ Shape ${shape}`;
+  const shape = Math.round(Number(last.ctl || 0));
+  const trend = last.acwr === null || last.acwr === undefined ? '—' : `${Math.round(Number(last.acwr) * 100)}%`;
+  summary.textContent = `${formatPeriodSummary(startDate, endDate)} · 🔥 ${stress} · 🔋 ${shape} · 📈 ${trend}`;
+}
+
+function getPeriodRange() {
+  const endInput = document.getElementById('end-date');
+  const lookbackInput = document.getElementById('lookback-days');
+
+  const baseEnd = endInput.value ? new Date(`${endInput.value}T12:00:00`) : new Date();
+  const lookbackDays = Math.max(1, Number(lookbackInput.value || 28));
+  const shiftedEnd = addDays(baseEnd, -(periodOffset * lookbackDays));
+  const start = addDays(shiftedEnd, -(lookbackDays - 1));
+
+  return { start, end: shiftedEnd, lookbackDays };
 }
 
 async function refresh() {
-  const endInput = document.getElementById('end-date');
-  const lookbackInput = document.getElementById('lookback-days');
-
-  const endDate = endInput.value ? new Date(`${endInput.value}T12:00:00`) : new Date();
-  const lookbackDays = Math.max(1, Number(lookbackInput.value || 14));
-  const startDate = addDays(endDate, -(lookbackDays - 1));
-
-  const startIso = toIsoDate(startDate);
-  const endIso = toIsoDate(endDate);
+  const { start, end } = getPeriodRange();
+  const startIso = toIsoDate(start);
+  const endIso = toIsoDate(end);
 
   const response = await fetchTrainingLoad(startIso, endIso);
   const daily = response?.daily || [];
+  const labels = daily.map((point) => formatDayLabel(String(point.date)));
 
-  renderCharts(daily);
-  updateSummary(daily);
+  clearCharts();
+  makeStressShapeChart(labels, daily);
+  makeTrendChart(labels, daily);
+  makeDailyLoadChart(labels, daily);
+  updateSummary(daily, start, end);
 }
 
 function initControls() {
-  const todayIso = toIsoDate(new Date());
   const endInput = document.getElementById('end-date');
   const refreshBtn = document.getElementById('refresh-btn');
   const lookbackInput = document.getElementById('lookback-days');
+  const prevBtn = document.getElementById('prev-period');
+  const nextBtn = document.getElementById('next-period');
 
-  endInput.value = todayIso;
-  refreshBtn.addEventListener('click', () => refresh());
-  lookbackInput.addEventListener('change', () => refresh());
-  endInput.addEventListener('change', () => refresh());
+  endInput.value = toIsoDate(new Date());
+
+  refreshBtn.addEventListener('click', () => {
+    periodOffset = 0;
+    refresh();
+  });
+  lookbackInput.addEventListener('change', () => {
+    periodOffset = 0;
+    refresh();
+  });
+  endInput.addEventListener('change', () => {
+    periodOffset = 0;
+    refresh();
+  });
+
+  prevBtn.addEventListener('click', () => {
+    periodOffset += 1;
+    refresh();
+  });
+
+  nextBtn.addEventListener('click', () => {
+    periodOffset = Math.max(0, periodOffset - 1);
+    refresh();
+  });
 }
 
 initControls();

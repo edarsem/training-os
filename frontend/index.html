@@ -79,7 +79,6 @@
         <header class="flex justify-between items-center mb-8">
             <h1 class="text-3xl font-bold text-gray-800">🏋️ Training OS</h1>
             <div class="flex items-center space-x-4">
-                <span class="font-semibold text-lg" x-text="weekLabel"></span>
                 <a href="analysis.html" class="px-3 py-1 bg-white border rounded shadow-sm hover:bg-gray-50">📈 Trends</a>
                 <a href="training-load.html" class="px-3 py-1 bg-white border rounded shadow-sm hover:bg-gray-50">📊 Training Load</a>
                 <a href="chat-history.html" class="px-3 py-1 bg-white border rounded shadow-sm hover:bg-gray-50">🗂️ Chat History</a>
@@ -87,33 +86,35 @@
         </header>
 
         <div class="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-6">
-            <div class="bg-white p-5 rounded-lg shadow-sm border border-gray-200">
-                <h2 class="text-xl font-semibold mb-3">📝 Weekly Plan</h2>
+            <div class="bg-white p-5 rounded-lg shadow-sm border border-gray-200 h-56 flex flex-col">
+                <h2 class="text-xl font-semibold mb-3">📝 Week Plan</h2>
 
-                <div x-show="!editPlan" x-cloak @click="editPlan = true" class="cursor-pointer">
+                <div x-show="!editPlan" x-cloak @click="editPlan = true" class="cursor-pointer overflow-y-auto flex-1 pr-1">
                     <p class="text-gray-700 whitespace-pre-wrap" x-text="plan.description || 'Click to add your weekly plan.'"></p>
                 </div>
 
-                <form x-show="editPlan" @submit.prevent="savePlan()" @keydown.meta.enter.prevent="savePlan()" @keydown.ctrl.enter.prevent="savePlan()" x-cloak class="space-y-3">
+                <form x-show="editPlan" x-cloak class="space-y-3 flex-1 flex flex-col">
                     <div>
-                        <textarea x-model="planForm.description" rows="4" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm border p-2"></textarea>
+                        <textarea x-model="planForm.description" rows="4" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm border p-2 h-28"></textarea>
                     </div>
                     <div class="flex justify-end space-x-2">
                         <button type="button" @click="editPlan = false" class="bg-white border border-gray-300 text-gray-700 py-2 px-4 rounded hover:bg-gray-50 text-sm font-medium">Cancel</button>
-                        <button type="submit" class="bg-blue-600 text-white py-2 px-4 rounded hover:bg-blue-700 text-sm font-medium">Save</button>
+                        <button type="button" @click="savePlan()" class="bg-blue-600 text-white py-2 px-4 rounded hover:bg-blue-700 text-sm font-medium">Save</button>
                     </div>
                 </form>
             </div>
 
-            <div class="bg-white p-5 rounded-lg shadow-sm border border-gray-200">
+            <div class="bg-white p-5 rounded-lg shadow-sm border border-gray-200 h-56">
                 <h3 class="text-lg font-semibold mb-3">📊 Week Stats</h3>
-                <div class="grid grid-cols-3 gap-y-2 gap-x-4 text-base text-gray-700">
+                <div class="grid grid-cols-4 gap-y-2 gap-x-4 text-base text-gray-700">
                     <p>🏃 <span x-text="weekStats.runTrailKm + ' km'"></span></p>
                     <p>⛰️ <span x-text="weekStats.elevationM + ' m'"></span></p>
                     <p>🏊 <span x-text="weekStats.swimKm + ' km'"></span></p>
                     <p>🚴 <span x-text="weekStats.bikeKm + ' km'"></span></p>
                     <p>💪 <span x-text="weekStats.strengthTime"></span></p>
                     <p>⏱️ <span x-text="weekStats.totalTime"></span></p>
+                    <p>⚡ <span x-text="weekStats.weekLoad + ' TL'"></span></p>
+                    <p>🔋 <span x-text="weekStats.weekShape"></span></p>
                 </div>
             </div>
         </div>
@@ -124,15 +125,13 @@
                     <div class="justify-self-start">
                         <button @click="prevWeek()" class="w-32 px-4 py-2 bg-white border rounded-full shadow-sm hover:bg-gray-50 text-sm font-medium text-center">&larr; Prev Week</button>
                     </div>
-                    <div class="justify-self-center text-sm text-gray-600 font-medium" x-text="weekLabel"></div>
-                    <div class="justify-self-end flex items-center gap-2">
+                    <div class="justify-self-center flex items-center gap-2">
                         <input type="date" x-model="weekJumpDate" @change="jumpToDateInWeek()" class="px-2 py-2 bg-white border rounded shadow-sm text-sm">
                         <button @click="goToCurrentWeek()" class="px-3 py-2 bg-white border rounded shadow-sm hover:bg-gray-50 text-sm font-medium">Today</button>
+                    </div>
+                    <div class="justify-self-end flex items-center gap-2">
                         <button @click="refreshFromStrava()" :disabled="isRefreshing" class="px-4 py-2 bg-white border rounded-full shadow-sm hover:bg-gray-50 text-sm font-medium disabled:opacity-50">
                             <span x-text="isRefreshing ? 'Refreshing…' : '⟳ Refresh Strava'"></span>
-                        </button>
-                        <button @click="recomputeAllTrainingLoad()" :disabled="isRecomputingTrainingLoad" class="px-4 py-2 bg-white border rounded-full shadow-sm hover:bg-gray-50 text-sm font-medium disabled:opacity-50">
-                            <span x-text="isRecomputingTrainingLoad ? 'Recomputing…' : '⚙️ Recompute TL (dev)'"></span>
                         </button>
                         <button @click="nextWeek()" class="w-32 px-4 py-2 bg-white border rounded-full shadow-sm hover:bg-gray-50 text-sm font-medium text-center">Next Week &rarr;</button>
                     </div>

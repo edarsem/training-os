@@ -83,7 +83,29 @@ document.addEventListener('alpine:init', () => {
             swimKm: '0.0',
             bikeKm: '0.0',
             strengthTime: "0'",
-            totalTime: "0'"
+            totalTime: "0'",
+            weekLoad: 0,
+            weekShape: 0,
+        },
+
+        async fetchWeekLoadState() {
+            const start = getStartOfIsoWeek(this.currentDate);
+            const end = addDays(start, 6);
+            const startIso = toIsoDate(start);
+            const endIso = toIsoDate(end);
+
+            try {
+                const res = await fetch(`${API_BASE}/training-load?start_date=${startIso}&end_date=${endIso}`);
+                if (!res.ok) {
+                    this.weekStats.weekShape = 0;
+                    return;
+                }
+                const data = await res.json();
+                this.weekStats.weekShape = Math.round(Number(data?.current_ctl || 0));
+            } catch (e) {
+                console.error('Failed to fetch week load state', e);
+                this.weekStats.weekShape = 0;
+            }
         },
         
         plan: {},
@@ -243,6 +265,7 @@ document.addEventListener('alpine:init', () => {
                     const data = await res.json();
                     this.summary = data;
                     this.computeWeekStats();
+                    await this.fetchWeekLoadState();
                     this.plan = data.plan || {};
                     this.planForm = { 
                         description: this.plan.description || '', 
@@ -447,13 +470,18 @@ document.addEventListener('alpine:init', () => {
             const totalMinutes = sessions
                 .reduce((sum, session) => sum + (session.moving_duration_minutes || session.duration_minutes || 0), 0);
 
+            const weekLoad = sessions
+                .reduce((sum, session) => sum + Number(session.training_load || 0), 0);
+
             this.weekStats = {
                 runTrailKm: this.formatKm(runTrailKm),
                 elevationM: Math.round(elevationM),
                 swimKm: this.formatKm(swimKm),
                 bikeKm: this.formatKm(bikeKm),
                 strengthTime: this.formatDuration(strengthMinutes),
-                totalTime: this.formatDuration(totalMinutes)
+                totalTime: this.formatDuration(totalMinutes),
+                weekLoad: Math.round(weekLoad),
+                weekShape: this.weekStats.weekShape || 0,
             };
         },
 
@@ -472,7 +500,7 @@ document.addEventListener('alpine:init', () => {
             if (!session.distance_km || !['run', 'trail', 'bike', 'hike', 'swim', 'skate'].includes(session.type)) {
                 return '';
             }
-            return `${this.formatKm(session.distance_km)} km`;
+            return `${Math.round(Number(session.distance_km || 0))} km`;
         },
 
         formatTrainingLoad(value) {
@@ -489,7 +517,7 @@ document.addEventListener('alpine:init', () => {
             if (!session || session.training_load === null || session.training_load === undefined) {
                 return '';
             }
-            const tl = this.formatTrainingLoad(session.training_load);
+            const tl = `${Math.round(Number(session.training_load || 0))}`;
             return tl ? `${tl} TL` : '';
         },
 

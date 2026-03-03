@@ -12,14 +12,35 @@
       <h1 class="text-3xl font-bold text-gray-800">📈 Trends</h1>
       <div class="flex items-center gap-2">
         <a href="training-load.html" class="px-3 py-1 bg-white border rounded shadow-sm hover:bg-gray-50">📊 Training Load</a>
-        <a href="index.html" class="px-3 py-1 bg-white border rounded shadow-sm hover:bg-gray-50">← Back to Calendar</a>
+        <a href="index.html" class="px-3 py-1 bg-white border rounded shadow-sm hover:bg-gray-50">🗓️ Calendar</a>
       </div>
     </header>
 
-    <div class="overflow-x-auto overflow-y-auto max-h-[78vh] pr-1">
-      <div class="space-y-4 min-w-[1200px]">
-        <div class="bg-white rounded-lg shadow-sm border border-gray-200 p-3"><canvas id="chart-atl-ctl" height="120"></canvas></div>
-        <div class="bg-white rounded-lg shadow-sm border border-gray-200 p-3"><canvas id="chart-shape" height="120"></canvas></div>
+    <div class="bg-white rounded-lg shadow-sm border border-gray-200 p-3 mb-4 flex items-end gap-3">
+      <div>
+        <label class="block text-xs text-gray-600 mb-1">End date</label>
+        <input id="end-date" type="date" class="px-2 py-2 bg-white border rounded shadow-sm text-sm">
+      </div>
+      <div>
+        <label class="block text-xs text-gray-600 mb-1">Window (weeks)</label>
+        <select id="lookback-weeks" class="px-2 py-2 bg-white border rounded shadow-sm text-sm">
+          <option value="4">4 weeks</option>
+          <option value="8">8 weeks</option>
+          <option value="12" selected>12 weeks</option>
+          <option value="16">16 weeks</option>
+          <option value="24">24 weeks</option>
+          <option value="36">36 weeks</option>
+        </select>
+      </div>
+      <button id="prev-period" class="px-3 py-2 bg-white border rounded shadow-sm hover:bg-gray-50 text-sm">← Prev period</button>
+      <button id="next-period" class="px-3 py-2 bg-white border rounded shadow-sm hover:bg-gray-50 text-sm">Next period →</button>
+      <button id="refresh-btn" class="px-4 py-2 bg-white border rounded-full shadow-sm hover:bg-gray-50 text-sm font-medium">Refresh</button>
+      <div id="summary" class="ml-auto text-sm text-gray-700"></div>
+    </div>
+
+    <div class="overflow-y-auto max-h-[78vh] pr-1">
+      <div class="space-y-4">
+        <div class="bg-white rounded-lg shadow-sm border border-gray-200 p-3"><canvas id="chart-shape-trend" height="130"></canvas></div>
         <div class="bg-white rounded-lg shadow-sm border border-gray-200 p-3"><canvas id="chart-run" height="120"></canvas></div>
         <div class="bg-white rounded-lg shadow-sm border border-gray-200 p-3"><canvas id="chart-elev" height="120"></canvas></div>
         <div class="bg-white rounded-lg shadow-sm border border-gray-200 p-3"><canvas id="chart-bike" height="120"></canvas></div>
