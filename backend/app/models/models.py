@@ -21,6 +21,7 @@ class Session(Base):
     max_heart_rate_bpm = Column(Float, nullable=True)
     perceived_intensity = Column(Integer, nullable=True) # 1-10
     training_load = Column(Float, nullable=True)
+    hr_stream_json = Column(Text, nullable=True)
     notes = Column(Text, nullable=True)
     
     created_at = Column(DateTime(timezone=True), server_default=func.now())
@@ -31,6 +32,7 @@ class SessionHRZoneTime(Base):
     __tablename__ = "session_hr_zone_time"
 
     session_id = Column(Integer, ForeignKey("sessions.id", ondelete="CASCADE"), primary_key=True)
+    zone_0_seconds = Column(Integer, nullable=False, default=0)
     zone_1_seconds = Column(Integer, nullable=False, default=0)
     zone_2_seconds = Column(Integer, nullable=False, default=0)
     zone_3_seconds = Column(Integer, nullable=False, default=0)

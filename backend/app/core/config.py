@@ -34,5 +34,7 @@ class Settings(BaseSettings):
     LLM_MCP_MAX_TOOL_CALLS: int = 6
 
     TRAINING_LOAD_THRESHOLD_HR_BPM: float | None = None
+    TRAINING_LOAD_MAX_HR_BPM: float = 196.0
+    TRAINING_LOAD_STORE_HR_STREAMS_DEV: bool = True
 
 settings = Settings()

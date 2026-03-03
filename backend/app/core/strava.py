@@ -9,6 +9,7 @@ from urllib import error, parse, request
 
 from app.core.config import settings
 from app.core.training_load_defaults import DEFAULT_TRAINING_LOAD_ZONE_BOUNDARIES_PCT
+from app.core.training_load_defaults import softplus4_training_load_per_hour
 
 
 class StravaConfigError(RuntimeError):
@@ -211,7 +212,14 @@ class StravaClient:
         keys: list[str],
     ) -> tuple[dict[str, Any], StravaRateLimits]:
         key_list = ",".join(keys)
-        query = parse.urlencode({"keys": key_list, "key_by_type": "true"})
+        query = parse.urlencode(
+            {
+                "keys": key_list,
+                "key_by_type": "true",
+                "resolution": "high",
+                "series_type": "time",
+            }
+        )
         url = f"{self.api_base_url}/activities/{activity_id}/streams?{query}"
         body, headers = self._request(
             method="GET",
@@ -227,19 +235,73 @@ class StravaClient:
             return 0
 
         pct = (heart_rate_bpm / threshold_hr_bpm) * 100.0
-        z1_max, z2_max, z3_max, z4_max, z5_max = DEFAULT_TRAINING_LOAD_ZONE_BOUNDARIES_PCT
+        z0_max, z1_max, z2_max, z3_max, z4_max, z5_max = DEFAULT_TRAINING_LOAD_ZONE_BOUNDARIES_PCT
 
-        if pct < z1_max:
+        if pct < z0_max:
             return 0
-        if pct <= z2_max:
+        if pct <= z1_max:
             return 1
-        if pct <= z3_max:
+        if pct <= z2_max:
             return 2
-        if pct <= z4_max:
+        if pct <= z3_max:
             return 3
-        if pct <= z5_max:
+        if pct <= z4_max:
             return 4
-        return 5
+        if pct <= z5_max:
+            return 5
+        return 6
+
+    def _extract_heartrate_and_time_streams(self, streams: dict[str, Any]) -> tuple[list[Any] | None, list[Any] | None]:
+        heartrate_stream = streams.get("heartrate") if isinstance(streams, dict) else None
+        time_stream = streams.get("time") if isinstance(streams, dict) else None
+        heartrate_values = heartrate_stream.get("data") if isinstance(heartrate_stream, dict) else None
+        if not isinstance(heartrate_values, list) or len(heartrate_values) == 0:
+            return None, None
+        time_values = time_stream.get("data") if isinstance(time_stream, dict) else None
+        return heartrate_values, (time_values if isinstance(time_values, list) else None)
+
+    def _compute_stream_training_metrics(
+        self,
+        *,
+        heartrate_values: list[Any],
+        time_values: list[Any] | None,
+        threshold_hr_bpm: float | None,
+        max_hr_bpm: float,
+    ) -> tuple[float, dict[str, int] | None]:
+        has_time_values = isinstance(time_values, list) and len(time_values) == len(heartrate_values)
+        zone_seconds = [0, 0, 0, 0, 0, 0, 0] if threshold_hr_bpm is not None and threshold_hr_bpm > 0 else None
+
+        total_load = 0.0
+        total_points = len(heartrate_values)
+        for idx, hr_raw in enumerate(heartrate_values):
+            try:
+                hr_value = float(hr_raw)
+            except (TypeError, ValueError):
+                continue
+            if hr_value <= 0:
+                continue
+
+            if has_time_values and idx < (total_points - 1):
+                try:
+                    dt = int(time_values[idx + 1]) - int(time_values[idx])
+                except (TypeError, ValueError):
+                    dt = 1
+                sample_seconds = max(1, dt)
+            else:
+                sample_seconds = 1
+
+            per_hour_load = softplus4_training_load_per_hour(hr_value, max_hr_bpm=max_hr_bpm)
+            total_load += per_hour_load * (float(sample_seconds) / 3600.0)
+
+            if zone_seconds is not None:
+                zone_index = self._get_zone_index_from_hr(hr_value, float(threshold_hr_bpm))
+                zone_seconds[zone_index] += sample_seconds
+
+        zone_payload = None
+        if zone_seconds is not None:
+            zone_payload = {f"zone_{idx}_seconds": int(zone_seconds[idx]) for idx in range(0, 7)}
+
+        return float(round(total_load, 6)), zone_payload
 
     def get_recent_activities(self, limit: int = 2) -> dict[str, Any]:
         self._ensure_basic_config()
@@ -356,14 +418,15 @@ class StravaClient:
             },
         }
 
-    def get_activity_hr_zone_seconds(
+    def get_activity_training_metrics(
         self,
+        *,
         activity_id: int,
-        threshold_hr_bpm: float,
-    ) -> dict[str, int] | None:
+        threshold_hr_bpm: float | None,
+        include_streams: bool = False,
+    ) -> dict[str, Any] | None:
         self._ensure_basic_config()
         normalized_activity_id = int(activity_id)
-        normalized_threshold_hr = float(threshold_hr_bpm)
 
         auto_refreshed = False
         if self._is_access_token_expired():
@@ -379,47 +442,25 @@ class StravaClient:
             auto_refreshed = True
             streams, _ = self._fetch_activity_streams(normalized_activity_id, keys=["time", "heartrate"])
 
-        heartrate_stream = streams.get("heartrate") if isinstance(streams, dict) else None
-        time_stream = streams.get("time") if isinstance(streams, dict) else None
-
-        heartrate_values = heartrate_stream.get("data") if isinstance(heartrate_stream, dict) else None
-        if not isinstance(heartrate_values, list) or len(heartrate_values) == 0:
+        heartrate_values, time_values = self._extract_heartrate_and_time_streams(streams)
+        if heartrate_values is None:
             return None
 
-        time_values = time_stream.get("data") if isinstance(time_stream, dict) else None
-        has_time_values = isinstance(time_values, list) and len(time_values) == len(heartrate_values)
-
-        zone_seconds = [0, 0, 0, 0, 0, 0]
-        total_points = len(heartrate_values)
-
-        for idx, hr_raw in enumerate(heartrate_values):
-            try:
-                hr_value = float(hr_raw)
-            except (TypeError, ValueError):
-                continue
-            if hr_value <= 0:
-                continue
-
-            if has_time_values and idx < (total_points - 1):
-                try:
-                    dt = int(time_values[idx + 1]) - int(time_values[idx])
-                except (TypeError, ValueError):
-                    dt = 1
-                sample_seconds = max(1, dt)
-            else:
-                sample_seconds = 1
-
-            zone_index = self._get_zone_index_from_hr(hr_value, normalized_threshold_hr)
-            zone_seconds[zone_index] += sample_seconds
+        training_load, zone_seconds = self._compute_stream_training_metrics(
+            heartrate_values=heartrate_values,
+            time_values=time_values,
+            threshold_hr_bpm=threshold_hr_bpm,
+            max_hr_bpm=float(settings.TRAINING_LOAD_MAX_HR_BPM),
+        )
 
         if auto_refreshed:
             self._save_tokens_to_store()
 
-        return {
-            "zone_1_seconds": int(zone_seconds[0]),
-            "zone_2_seconds": int(zone_seconds[1]),
-            "zone_3_seconds": int(zone_seconds[2]),
-            "zone_4_seconds": int(zone_seconds[3]),
-            "zone_5_seconds": int(zone_seconds[4]),
-            "zone_6_seconds": int(zone_seconds[5]),
+        payload: dict[str, Any] = {
+            "training_load": training_load,
+            "zone_seconds": zone_seconds,
         }
+        if include_streams:
+            payload["streams"] = streams
+        return payload
+

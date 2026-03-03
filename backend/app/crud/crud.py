@@ -32,9 +32,9 @@ def get_last_session_date(db: DBSession) -> Optional[date]:
 def upsert_session_hr_zone_time(
     db: DBSession,
     session_id: int,
-    zone_seconds: dict[str, int] | None,
+    zone_stats: dict[str, int | float | None] | None,
 ) -> Optional[models.SessionHRZoneTime]:
-    if not zone_seconds:
+    if not zone_stats:
         return None
 
     record = db.query(models.SessionHRZoneTime).filter(models.SessionHRZoneTime.session_id == session_id).first()
@@ -42,19 +42,20 @@ def upsert_session_hr_zone_time(
         record = models.SessionHRZoneTime(session_id=session_id)
         db.add(record)
 
-    record.zone_1_seconds = max(0, int(zone_seconds.get("zone_1_seconds", 0)))
-    record.zone_2_seconds = max(0, int(zone_seconds.get("zone_2_seconds", 0)))
-    record.zone_3_seconds = max(0, int(zone_seconds.get("zone_3_seconds", 0)))
-    record.zone_4_seconds = max(0, int(zone_seconds.get("zone_4_seconds", 0)))
-    record.zone_5_seconds = max(0, int(zone_seconds.get("zone_5_seconds", 0)))
-    record.zone_6_seconds = max(0, int(zone_seconds.get("zone_6_seconds", 0)))
+    record.zone_0_seconds = max(0, int(zone_stats.get("zone_0_seconds", 0)))
+    record.zone_1_seconds = max(0, int(zone_stats.get("zone_1_seconds", 0)))
+    record.zone_2_seconds = max(0, int(zone_stats.get("zone_2_seconds", 0)))
+    record.zone_3_seconds = max(0, int(zone_stats.get("zone_3_seconds", 0)))
+    record.zone_4_seconds = max(0, int(zone_stats.get("zone_4_seconds", 0)))
+    record.zone_5_seconds = max(0, int(zone_stats.get("zone_5_seconds", 0)))
+    record.zone_6_seconds = max(0, int(zone_stats.get("zone_6_seconds", 0)))
     return record
 
 
 def get_session_hr_zone_time_map(
     db: DBSession,
     session_ids: List[int],
-) -> dict[int, dict[str, int]]:
+) -> dict[int, dict[str, int | float | None]]:
     if not session_ids:
         return {}
 
@@ -63,9 +64,10 @@ def get_session_hr_zone_time_map(
         .filter(models.SessionHRZoneTime.session_id.in_(session_ids))
         .all()
     )
-    out: dict[int, dict[str, int]] = {}
+    out: dict[int, dict[str, int | float | None]] = {}
     for record in records:
         out[int(record.session_id)] = {
+            "zone_0_seconds": int(record.zone_0_seconds or 0),
             "zone_1_seconds": int(record.zone_1_seconds or 0),
             "zone_2_seconds": int(record.zone_2_seconds or 0),
             "zone_3_seconds": int(record.zone_3_seconds or 0),

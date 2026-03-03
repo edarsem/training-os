@@ -25,6 +25,8 @@ def run_sqlite_schema_updates() -> None:
         session_columns = {str(row[1]) for row in table_info_rows}
         if "training_load" not in session_columns:
             conn.execute(text("ALTER TABLE sessions ADD COLUMN training_load FLOAT"))
+        if "hr_stream_json" not in session_columns:
+            conn.execute(text("ALTER TABLE sessions ADD COLUMN hr_stream_json TEXT"))
 
         conn.execute(
             text(
@@ -47,6 +49,7 @@ def run_sqlite_schema_updates() -> None:
                 """
                 CREATE TABLE IF NOT EXISTS session_hr_zone_time (
                     session_id INTEGER PRIMARY KEY,
+                    zone_0_seconds INTEGER NOT NULL DEFAULT 0,
                     zone_1_seconds INTEGER NOT NULL DEFAULT 0,
                     zone_2_seconds INTEGER NOT NULL DEFAULT 0,
                     zone_3_seconds INTEGER NOT NULL DEFAULT 0,
@@ -60,6 +63,12 @@ def run_sqlite_schema_updates() -> None:
                 """
             )
         )
+
+        session_zone_rows = conn.execute(text("PRAGMA table_info(session_hr_zone_time)")).fetchall()
+        session_zone_columns = {str(row[1]) for row in session_zone_rows}
+
+        if "zone_0_seconds" not in session_zone_columns:
+            conn.execute(text("ALTER TABLE session_hr_zone_time ADD COLUMN zone_0_seconds INTEGER NOT NULL DEFAULT 0"))
 
 def get_db():
     db = SessionLocal()

@@ -118,8 +118,11 @@ class TrainingLoadDailyPoint(BaseModel):
 
 
 class TrainingLoadConfigResponse(BaseModel):
-    threshold_hr: float
-    zone_coefficients: List[float]
+    function: str
+    softplus4_a: float
+    softplus4_b: float
+    softplus4_c: float
+    softplus4_d: float
     atl_time_constant_days: float
     ctl_time_constant_days: float
 
@@ -133,6 +136,26 @@ class TrainingLoadResponse(BaseModel):
     config: TrainingLoadConfigResponse
     assumptions: List[str] = Field(default_factory=list)
     daily: List[TrainingLoadDailyPoint] = Field(default_factory=list)
+
+
+class Softplus4CurvePoint(BaseModel):
+    hr_bpm: float
+    training_load_per_hour: float
+
+
+class Softplus4CurveResponse(BaseModel):
+    softplus4_a: float
+    softplus4_b: float
+    softplus4_c: float
+    softplus4_d: float
+    max_hr_bpm: float
+    hr_start_bpm: float
+    hr_end_bpm: float
+    hr_step_bpm: float
+    min_value: float
+    min_value_hr_bpm: float
+    negative_points: int
+    points: List[Softplus4CurvePoint] = Field(default_factory=list)
 
 
 class StravaActivityResponse(BaseModel):

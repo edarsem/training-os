@@ -1,3 +1,5 @@
+import json
+
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 from typing import List
@@ -7,7 +9,11 @@ from app.core.config import settings
 from app.core.training_load_defaults import (
     DEFAULT_TRAINING_LOAD_ATL_DAYS,
     DEFAULT_TRAINING_LOAD_CTL_DAYS,
-    DEFAULT_TRAINING_LOAD_ZONE_COEFFICIENTS,
+    TRAINING_LOAD_SOFTPLUS4_A,
+    TRAINING_LOAD_SOFTPLUS4_B,
+    TRAINING_LOAD_SOFTPLUS4_C,
+    TRAINING_LOAD_SOFTPLUS4_D,
+    softplus4_training_load_per_hour,
 )
 from app.core.strava import StravaAPIError, StravaClient, StravaConfigError
 from app.llm.service import LLMConfigurationError, LLMProviderError, TrainingOSLLMService
@@ -18,15 +24,6 @@ from app.schemas import schemas
 from app.crud import crud
 
 router = APIRouter()
-
-
-def _get_threshold_hr_or_raise() -> float:
-    if settings.TRAINING_LOAD_THRESHOLD_HR_BPM is None:
-        raise HTTPException(
-            status_code=400,
-            detail="TRAINING_LOAD_THRESHOLD_HR_BPM is missing. Set it in your .env file.",
-        )
-    return float(settings.TRAINING_LOAD_THRESHOLD_HR_BPM)
 
 
 def _map_strava_sport_type_to_session_type(sport_type: str | None) -> str:
@@ -149,38 +146,45 @@ def _map_strava_activity_to_session_payload(activity: dict) -> dict | None:
         "average_pace_min_per_km": average_pace_min_per_km,
         "average_heart_rate_bpm": float(average_heart_rate) if average_heart_rate is not None else None,
         "max_heart_rate_bpm": float(max_heart_rate) if max_heart_rate is not None else None,
-        "hr_zone_seconds": activity.get("hr_zone_seconds"),
+        "training_load": (float(activity.get("training_load")) if activity.get("training_load") is not None else None),
+        "hr_stream_json": activity.get("hr_stream_json"),
         "notes": notes,
         "name": activity.get("name"),
     }
 
 
-def _enrich_activity_for_import(activity: dict, client: StravaClient, threshold_hr_bpm: float) -> dict:
+def _enrich_activity_for_import(activity: dict, client: StravaClient) -> dict:
     activity_id = activity.get("id")
     if activity_id is None:
         return activity
 
-    if activity.get("private"):
-        return activity
-
     merged = dict(activity)
 
-    has_description = str(activity.get("description") or "").strip() != ""
-    if not has_description:
-        try:
-            detail = client.get_activity_by_id(int(activity_id)).get("activity", {})
-            if isinstance(detail, dict):
-                merged.update(detail)
-        except Exception:
-            pass
+    try:
+        detail = client.get_activity_by_id(int(activity_id)).get("activity", {})
+        if isinstance(detail, dict):
+            merged.update(detail)
+    except Exception:
+        pass
 
     try:
-        zone_seconds = client.get_activity_hr_zone_seconds(
-            int(activity_id),
-            threshold_hr_bpm=float(threshold_hr_bpm),
+        threshold_hr = settings.TRAINING_LOAD_THRESHOLD_HR_BPM
+        metrics = client.get_activity_training_metrics(
+            activity_id=int(activity_id),
+            threshold_hr_bpm=(float(threshold_hr) if threshold_hr is not None else None),
+            include_streams=bool(settings.TRAINING_LOAD_STORE_HR_STREAMS_DEV),
         )
-        if zone_seconds:
-            merged["hr_zone_seconds"] = zone_seconds
+        if metrics:
+            training_load = metrics.get("training_load")
+            if training_load is not None:
+                merged["training_load"] = float(training_load)
+            zone_seconds = metrics.get("zone_seconds")
+            if isinstance(zone_seconds, dict):
+                merged["hr_zone_seconds"] = zone_seconds
+            if bool(settings.TRAINING_LOAD_STORE_HR_STREAMS_DEV):
+                streams = metrics.get("streams")
+                if isinstance(streams, dict):
+                    merged["hr_stream_json"] = json.dumps(streams, ensure_ascii=False)
     except Exception:
         pass
 
@@ -190,7 +194,6 @@ def _enrich_activity_for_import(activity: dict, client: StravaClient, threshold_
 def _upsert_strava_activities(
     db: Session,
     client: StravaClient,
-    threshold_hr_bpm: float,
     activities: List[dict],
 ) -> tuple[int, int, int, List[schemas.StravaImportItemResponse]]:
     imported_count = 0
@@ -199,7 +202,7 @@ def _upsert_strava_activities(
     items: List[schemas.StravaImportItemResponse] = []
 
     for activity in activities:
-        enriched_activity = _enrich_activity_for_import(activity, client, threshold_hr_bpm=threshold_hr_bpm)
+        enriched_activity = _enrich_activity_for_import(activity, client)
         payload = _map_strava_activity_to_session_payload(enriched_activity)
         if payload is None:
             skipped_count += 1
@@ -224,6 +227,10 @@ def _upsert_strava_activities(
             existing.average_pace_min_per_km = payload["average_pace_min_per_km"]
             existing.average_heart_rate_bpm = payload["average_heart_rate_bpm"]
             existing.max_heart_rate_bpm = payload["max_heart_rate_bpm"]
+            if payload["training_load"] is not None:
+                existing.training_load = payload["training_load"]
+            if payload.get("hr_stream_json") is not None:
+                existing.hr_stream_json = payload.get("hr_stream_json")
             existing.notes = payload["notes"]
             updated_count += 1
             action = "updated"
@@ -242,6 +249,8 @@ def _upsert_strava_activities(
                 average_pace_min_per_km=payload["average_pace_min_per_km"],
                 average_heart_rate_bpm=payload["average_heart_rate_bpm"],
                 max_heart_rate_bpm=payload["max_heart_rate_bpm"],
+                training_load=payload["training_load"],
+                hr_stream_json=payload.get("hr_stream_json"),
                 notes=payload["notes"],
             )
             db.add(new_session)
@@ -250,11 +259,13 @@ def _upsert_strava_activities(
             action = "imported"
             session_id = new_session.id
 
-        crud.upsert_session_hr_zone_time(
-            db,
-            session_id=session_id,
-            zone_seconds=payload.get("hr_zone_seconds"),
-        )
+        zone_seconds = enriched_activity.get("hr_zone_seconds")
+        if isinstance(zone_seconds, dict):
+            crud.upsert_session_hr_zone_time(
+                db,
+                int(session_id),
+                zone_seconds,
+            )
 
         items.append(
             schemas.StravaImportItemResponse(
@@ -271,15 +282,15 @@ def _upsert_strava_activities(
     return imported_count, updated_count, skipped_count, items
 
 
-def _get_oldest_imported_session_date(items: List[schemas.StravaImportItemResponse]) -> date | None:
-    imported_dates = [
+def _get_oldest_changed_session_date(items: List[schemas.StravaImportItemResponse]) -> date | None:
+    changed_dates = [
         item.session_date
         for item in items
-        if item.action == "imported" and item.session_date is not None
+        if item.action in {"imported", "updated"} and item.session_date is not None
     ]
-    if not imported_dates:
+    if not changed_dates:
         return None
-    return min(imported_dates)
+    return min(changed_dates)
 
 # --- Sessions ---
 @router.get("/sessions", response_model=List[schemas.SessionResponse])
@@ -317,6 +328,7 @@ def read_session_hr_zones(session_id: int, db: Session = Depends(get_db)):
 
     zone_map = crud.get_session_hr_zone_time_map(db, [session_id])
     zone_seconds = zone_map.get(session_id, {
+        "zone_0_seconds": 0,
         "zone_1_seconds": 0,
         "zone_2_seconds": 0,
         "zone_3_seconds": 0,
@@ -324,11 +336,16 @@ def read_session_hr_zones(session_id: int, db: Session = Depends(get_db)):
         "zone_5_seconds": 0,
         "zone_6_seconds": 0,
     })
-    total_seconds = int(sum(int(value or 0) for value in zone_seconds.values()))
+    seconds_only = {
+        key: int(value or 0)
+        for key, value in zone_seconds.items()
+        if key.endswith("_seconds")
+    }
+    total_seconds = int(sum(seconds_only.values()))
 
     return schemas.SessionHRZonesResponse(
         session_id=session_id,
-        zone_seconds={key: int(value or 0) for key, value in zone_seconds.items()},
+        zone_seconds=seconds_only,
         total_seconds=total_seconds,
     )
 
@@ -461,8 +478,6 @@ def get_training_load(
     if resolved_end < resolved_start:
         raise HTTPException(status_code=400, detail="end_date must be greater than or equal to start_date")
 
-    threshold_hr_bpm = _get_threshold_hr_or_raise()
-
     persisted_daily = crud.get_daily_training_load_by_date_range(db, resolved_start, resolved_end)
     if persisted_daily:
         current_atl = float(persisted_daily[-1].atl)
@@ -472,7 +487,7 @@ def get_training_load(
         assumptions = [
             "Daily ATL/CTL/ACWR values are loaded from persisted history.",
             "Session loads are precomputed and stored for fast curve retrieval.",
-            "Zone coefficients and ATL/CTL constants currently use project-level defaults.",
+            "Session load uses softplus4 over HR stream and ATL/CTL constants use project-level defaults.",
         ]
 
         return schemas.TrainingLoadResponse(
@@ -482,8 +497,11 @@ def get_training_load(
             current_ctl=current_ctl,
             current_acwr=current_acwr,
             config=schemas.TrainingLoadConfigResponse(
-                threshold_hr=threshold_hr_bpm,
-                zone_coefficients=list(DEFAULT_TRAINING_LOAD_ZONE_COEFFICIENTS),
+                function="softplus4",
+                softplus4_a=float(TRAINING_LOAD_SOFTPLUS4_A),
+                softplus4_b=float(TRAINING_LOAD_SOFTPLUS4_B),
+                softplus4_c=float(TRAINING_LOAD_SOFTPLUS4_C),
+                softplus4_d=float(TRAINING_LOAD_SOFTPLUS4_D),
                 atl_time_constant_days=float(DEFAULT_TRAINING_LOAD_ATL_DAYS),
                 ctl_time_constant_days=float(DEFAULT_TRAINING_LOAD_CTL_DAYS),
             ),
@@ -505,21 +523,15 @@ def get_training_load(
 
     warmup_start = first_session_date or resolved_start
     sessions = crud.get_sessions_by_date_range(db, warmup_start, resolved_end)
-    session_zone_time_map = crud.get_session_hr_zone_time_map(
-        db,
-        [int(session.id) for session in sessions if session.id is not None],
-    )
 
     config = TrainingLoadConfig(
-        threshold_hr=threshold_hr_bpm,
-        zone_coefficients=list(DEFAULT_TRAINING_LOAD_ZONE_COEFFICIENTS),
         atl_time_constant_days=float(DEFAULT_TRAINING_LOAD_ATL_DAYS),
         ctl_time_constant_days=float(DEFAULT_TRAINING_LOAD_CTL_DAYS),
     )
 
     computed = compute_training_load_series(
         sessions=sessions,
-        session_zone_time_map=session_zone_time_map,
+        session_zone_time_map={},
         start_date=warmup_start,
         end_date=resolved_end,
         config=config,
@@ -532,10 +544,9 @@ def get_training_load(
     current_acwr = filtered_daily[-1]["acwr"] if filtered_daily else None
 
     assumptions = [
-        "If available, per-session zone seconds are computed from Strava HR streams and persisted.",
-        "Sessions without persisted zone seconds fallback to average-HR whole-session approximation.",
-        "Sessions without HR data contribute 0 load.",
-        "Zone coefficients and ATL/CTL constants currently use project-level defaults.",
+        "Per-session load is integrated directly from Strava HR streams with softplus4 mapping at import/backfill time.",
+        "Sessions missing persisted stream-derived load contribute 0 load until backfilled.",
+        "Softplus4 parameters and ATL/CTL constants currently use project-level defaults.",
     ]
 
     return schemas.TrainingLoadResponse(
@@ -547,6 +558,65 @@ def get_training_load(
         config=schemas.TrainingLoadConfigResponse(**computed["config"]),
         assumptions=assumptions,
         daily=[schemas.TrainingLoadDailyPoint(**point) for point in filtered_daily],
+    )
+
+
+@router.get("/training-load/softplus4-curve", response_model=schemas.Softplus4CurveResponse)
+def get_softplus4_curve(
+    max_hr_bpm: float = Query(default=200.0, ge=1.0, le=260.0),
+    hr_start_bpm: float = Query(default=40.0, ge=1.0, le=260.0),
+    hr_end_bpm: float = Query(default=220.0, ge=1.0, le=300.0),
+    hr_step_bpm: float = Query(default=1.0, gt=0.0, le=20.0),
+):
+    if hr_end_bpm < hr_start_bpm:
+        raise HTTPException(status_code=400, detail="hr_end_bpm must be greater than or equal to hr_start_bpm")
+
+    points: List[schemas.Softplus4CurvePoint] = []
+    min_value: float | None = None
+    min_value_hr: float | None = None
+    negative_points = 0
+
+    hr = float(hr_start_bpm)
+    max_iterations = 10000
+    iterations = 0
+
+    while hr <= float(hr_end_bpm) + 1e-9:
+        value = float(softplus4_training_load_per_hour(hr, max_hr_bpm=float(max_hr_bpm)))
+        hr_rounded = round(float(hr), 3)
+        value_rounded = round(value, 6)
+
+        points.append(
+            schemas.Softplus4CurvePoint(
+                hr_bpm=hr_rounded,
+                training_load_per_hour=value_rounded,
+            )
+        )
+
+        if min_value is None or value < min_value:
+            min_value = value
+            min_value_hr = hr_rounded
+
+        if value < 0:
+            negative_points += 1
+
+        hr += float(hr_step_bpm)
+        iterations += 1
+        if iterations > max_iterations:
+            raise HTTPException(status_code=400, detail="Too many points requested")
+
+    return schemas.Softplus4CurveResponse(
+        softplus4_a=float(TRAINING_LOAD_SOFTPLUS4_A),
+        softplus4_b=float(TRAINING_LOAD_SOFTPLUS4_B),
+        softplus4_c=float(TRAINING_LOAD_SOFTPLUS4_C),
+        softplus4_d=float(TRAINING_LOAD_SOFTPLUS4_D),
+        max_hr_bpm=float(max_hr_bpm),
+        hr_start_bpm=float(hr_start_bpm),
+        hr_end_bpm=float(hr_end_bpm),
+        hr_step_bpm=float(hr_step_bpm),
+        min_value=round(float(min_value or 0.0), 6),
+        min_value_hr_bpm=float(min_value_hr or hr_start_bpm),
+        negative_points=int(negative_points),
+        points=points,
     )
 
 
@@ -576,7 +646,6 @@ def import_recent_strava_activities(
     db: Session = Depends(get_db),
 ):
     client = StravaClient()
-    threshold_hr_bpm = _get_threshold_hr_or_raise()
     try:
         page_data = client.get_activities_page(page=1, per_page=limit)
     except StravaConfigError as exc:
@@ -587,14 +656,13 @@ def import_recent_strava_activities(
     imported_count, updated_count, skipped_count, items = _upsert_strava_activities(
         db=db,
         client=client,
-        threshold_hr_bpm=threshold_hr_bpm,
         activities=page_data.get("activities", []),
     )
 
     recompute_result = None
-    oldest_new_date = _get_oldest_imported_session_date(items)
-    if oldest_new_date is not None:
-        recompute_result = recompute_training_load_from_date(db, oldest_new_date)
+    oldest_changed_date = _get_oldest_changed_session_date(items)
+    if oldest_changed_date is not None:
+        recompute_result = recompute_training_load_from_date(db, oldest_changed_date)
 
     db.commit()
 
@@ -625,9 +693,9 @@ def refresh_strava_activities_until_known(
     db: Session = Depends(get_db),
 ):
     client = StravaClient()
-    threshold_hr_bpm = _get_threshold_hr_or_raise()
 
     all_new_activities: List[dict] = []
+    all_existing_missing_tl_activities: List[dict] = []
     checked_count = 0
     pages_fetched = 0
     stopped_on_existing = False
@@ -649,8 +717,11 @@ def refresh_strava_activities_until_known(
                 if payload is None:
                     continue
                 external_id = payload["external_id"]
-                exists = db.query(models.Session.id).filter(models.Session.external_id == external_id).first()
+                exists = db.query(models.Session).filter(models.Session.external_id == external_id).first()
                 if exists:
+                    if exists.training_load is None or float(exists.training_load) <= 0.0:
+                        all_existing_missing_tl_activities.append(activity)
+                        continue
                     stopped_on_existing = True
                     break
                 all_new_activities.append(activity)
@@ -662,22 +733,23 @@ def refresh_strava_activities_until_known(
     except StravaAPIError as exc:
         raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
 
+    activities_to_upsert = all_new_activities + all_existing_missing_tl_activities
+
     imported_count, updated_count, skipped_count, items = _upsert_strava_activities(
         db=db,
         client=client,
-        threshold_hr_bpm=threshold_hr_bpm,
-        activities=all_new_activities,
+        activities=activities_to_upsert,
     )
 
     recompute_result = None
-    oldest_new_date = _get_oldest_imported_session_date(items)
-    if oldest_new_date is not None:
-        recompute_result = recompute_training_load_from_date(db, oldest_new_date)
+    oldest_changed_date = _get_oldest_changed_session_date(items)
+    if oldest_changed_date is not None:
+        recompute_result = recompute_training_load_from_date(db, oldest_changed_date)
 
     db.commit()
 
     return schemas.StravaImportResponse(
-        fetched_count=len(all_new_activities),
+        fetched_count=len(activities_to_upsert),
         checked_count=checked_count,
         pages_fetched=pages_fetched,
         stopped_on_existing=stopped_on_existing,
@@ -703,7 +775,6 @@ def backfill_strava_activities(
     db: Session = Depends(get_db),
 ):
     client = StravaClient()
-    threshold_hr_bpm = _get_threshold_hr_or_raise()
 
     all_activities: List[dict] = []
     checked_count = 0
@@ -733,14 +804,13 @@ def backfill_strava_activities(
     imported_count, updated_count, skipped_count, items = _upsert_strava_activities(
         db=db,
         client=client,
-        threshold_hr_bpm=threshold_hr_bpm,
         activities=all_activities,
     )
 
     recompute_result = None
-    oldest_new_date = _get_oldest_imported_session_date(items)
-    if oldest_new_date is not None:
-        recompute_result = recompute_training_load_from_date(db, oldest_new_date)
+    oldest_changed_date = _get_oldest_changed_session_date(items)
+    if oldest_changed_date is not None:
+        recompute_result = recompute_training_load_from_date(db, oldest_changed_date)
 
     db.commit()
 
