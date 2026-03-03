@@ -93,6 +93,7 @@ def _resolve_session_for_activity_id(
 def _compute_training_load_from_stream_payload(streams_payload: dict, max_hr_bpm: float) -> float | None:
     heartrate_stream = streams_payload.get("heartrate") if isinstance(streams_payload, dict) else None
     time_stream = streams_payload.get("time") if isinstance(streams_payload, dict) else None
+    moving_stream = streams_payload.get("moving") if isinstance(streams_payload, dict) else None
 
     heartrate_values = heartrate_stream.get("data") if isinstance(heartrate_stream, dict) else None
     if not isinstance(heartrate_values, list) or len(heartrate_values) == 0:
@@ -100,6 +101,8 @@ def _compute_training_load_from_stream_payload(streams_payload: dict, max_hr_bpm
 
     time_values = time_stream.get("data") if isinstance(time_stream, dict) else None
     has_time_values = isinstance(time_values, list) and len(time_values) == len(heartrate_values)
+    moving_values = moving_stream.get("data") if isinstance(moving_stream, dict) else None
+    has_moving_values = isinstance(moving_values, list) and len(moving_values) == len(heartrate_values)
 
     total_load = 0.0
     total_points = len(heartrate_values)
@@ -112,6 +115,11 @@ def _compute_training_load_from_stream_payload(streams_payload: dict, max_hr_bpm
 
         if hr_value <= 0:
             continue
+
+        if has_moving_values:
+            moving_raw = moving_values[idx]
+            if not bool(moving_raw):
+                continue
 
         if has_time_values and idx < (total_points - 1):
             try:

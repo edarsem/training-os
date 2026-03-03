@@ -25,6 +25,10 @@ def run_sqlite_schema_updates() -> None:
         session_columns = {str(row[1]) for row in table_info_rows}
         if "training_load" not in session_columns:
             conn.execute(text("ALTER TABLE sessions ADD COLUMN training_load FLOAT"))
+        if "timezone_name" not in session_columns:
+            conn.execute(text("ALTER TABLE sessions ADD COLUMN timezone_name VARCHAR"))
+        if "training_load_elapsed" not in session_columns:
+            conn.execute(text("ALTER TABLE sessions ADD COLUMN training_load_elapsed FLOAT"))
         if "hr_stream_json" not in session_columns:
             conn.execute(text("ALTER TABLE sessions ADD COLUMN hr_stream_json TEXT"))
 

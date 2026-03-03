@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import json
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 
 from app.core.database import Base, SessionLocal, engine
@@ -43,9 +44,21 @@ def _session_has_training_load(session: models.Session | None) -> bool:
     return session.training_load is not None
 
 
-def _write_stream_file(*, streams_dir: Path, activity_id: int, streams: dict) -> None:
-    streams_dir.mkdir(parents=True, exist_ok=True)
-    out_file = streams_dir / f"{int(activity_id)}.json"
+def _resolve_stream_output_dir(*, streams_dir: Path, activity: dict) -> Path:
+    start_raw = activity.get("start_date_local") or activity.get("start_date")
+    if start_raw:
+        try:
+            parsed = datetime.fromisoformat(str(start_raw).replace("Z", "+00:00"))
+            return streams_dir / f"{parsed.year:04d}" / f"{parsed.month:02d}"
+        except Exception:
+            pass
+    return streams_dir / "unknown_date"
+
+
+def _write_stream_file(*, streams_dir: Path, activity: dict, activity_id: int, streams: dict) -> None:
+    out_dir = _resolve_stream_output_dir(streams_dir=streams_dir, activity=activity)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    out_file = out_dir / f"{int(activity_id)}.json"
     out_file.write_text(json.dumps(streams, ensure_ascii=False), encoding="utf-8")
 
 
@@ -116,6 +129,7 @@ def backfill_hr_zones(
                         try:
                             _write_stream_file(
                                 streams_dir=save_streams_dir,
+                                activity=activity,
                                 activity_id=int(activity_id),
                                 streams=streams_payload,
                             )
@@ -147,9 +161,9 @@ def main() -> None:
     parser.add_argument("--overwrite", action="store_true", help="Recompute zone seconds even if already present.")
     parser.add_argument(
         "--save-streams-dir",
-        type=Path,
-        default=Path("backend/data/strava_streams_tmp"),
-        help="Directory where raw stream payloads are saved temporarily (empty string disables saving).",
+        type=str,
+        default="backend/data/strava_streams/by_activity_date",
+        help="Directory where raw stream payloads are saved (empty string disables saving).",
     )
     args = parser.parse_args()
 
@@ -158,8 +172,11 @@ def main() -> None:
     else:
         max_sessions = max(1, int(args.limit))
 
-    save_streams_dir: Path | None = args.save_streams_dir
-    if str(save_streams_dir).strip() == "":
+    save_streams_dir_arg = str(args.save_streams_dir or "").strip()
+    save_streams_dir: Path | None = None
+    if save_streams_dir_arg != "":
+        save_streams_dir = Path(save_streams_dir_arg)
+    if save_streams_dir_arg == "":
         save_streams_dir = None
 
     try:

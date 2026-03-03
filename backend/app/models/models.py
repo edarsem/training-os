@@ -10,6 +10,7 @@ class Session(Base):
     date = Column(Date, index=True, nullable=False)
     start_time = Column(DateTime(timezone=True), nullable=True)
     external_id = Column(String, unique=True, index=True, nullable=True)
+    timezone_name = Column(String, nullable=True)
     type = Column(String, index=True, nullable=False) # run, trail, swim, bike, hike, skate, strength, mobility, other
     duration_minutes = Column(Integer, nullable=False)
     elapsed_duration_minutes = Column(Integer, nullable=True)
@@ -21,6 +22,7 @@ class Session(Base):
     max_heart_rate_bpm = Column(Float, nullable=True)
     perceived_intensity = Column(Integer, nullable=True) # 1-10
     training_load = Column(Float, nullable=True)
+    training_load_elapsed = Column(Float, nullable=True)
     hr_stream_json = Column(Text, nullable=True)
     notes = Column(Text, nullable=True)
     

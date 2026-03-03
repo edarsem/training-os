@@ -8,6 +8,7 @@ class SessionBase(BaseModel):
     date: date
     start_time: Optional[datetime] = None
     external_id: Optional[str] = None
+    timezone_name: Optional[str] = None
     type: str = Field(..., description="run, trail, swim, bike, hike, skate, strength, mobility, other")
     duration_minutes: int
     elapsed_duration_minutes: Optional[int] = None
@@ -19,6 +20,7 @@ class SessionBase(BaseModel):
     max_heart_rate_bpm: Optional[float] = None
     perceived_intensity: Optional[int] = Field(None, ge=1, le=10)
     training_load: Optional[float] = None
+    training_load_elapsed: Optional[float] = None
     notes: Optional[str] = None
 
 class SessionCreate(SessionBase):

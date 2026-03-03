@@ -60,6 +60,15 @@ function escapeHtml(text) {
         .replace(/'/g, '&#039;');
 }
 
+function parseApiDateTimeAsUtc(dateString) {
+    const raw = String(dateString || '').trim();
+    if (!raw) return null;
+    const hasZoneInfo = /[zZ]$|[+-]\d{2}:\d{2}$/.test(raw);
+    const normalized = hasZoneInfo ? raw : `${raw}Z`;
+    const parsed = new Date(normalized);
+    return Number.isNaN(parsed.getTime()) ? null : parsed;
+}
+
 document.addEventListener('alpine:init', () => {
     Alpine.data('app', () => ({
         currentDate: new Date(),
@@ -390,8 +399,10 @@ document.addEventListener('alpine:init', () => {
                         return leftHasNotes ? -1 : 1;
                     }
 
-                    const leftTime = left.start_time ? new Date(left.start_time).getTime() : Number.MAX_SAFE_INTEGER;
-                    const rightTime = right.start_time ? new Date(right.start_time).getTime() : Number.MAX_SAFE_INTEGER;
+                    const leftParsed = left.start_time ? parseApiDateTimeAsUtc(left.start_time) : null;
+                    const rightParsed = right.start_time ? parseApiDateTimeAsUtc(right.start_time) : null;
+                    const leftTime = leftParsed ? leftParsed.getTime() : Number.MAX_SAFE_INTEGER;
+                    const rightTime = rightParsed ? rightParsed.getTime() : Number.MAX_SAFE_INTEGER;
                     return leftTime - rightTime;
                 });
         },
@@ -485,9 +496,24 @@ document.addEventListener('alpine:init', () => {
             };
         },
 
-        formatTime(dateString) {
+        formatTime(dateString, timezoneName = null) {
             if (!dateString) return '';
-            const d = new Date(dateString);
+            const d = parseApiDateTimeAsUtc(dateString);
+            if (!d) return '';
+
+            if (timezoneName) {
+                try {
+                    const formatted = new Intl.DateTimeFormat('en-GB', {
+                        hour: '2-digit',
+                        minute: '2-digit',
+                        hour12: false,
+                        timeZone: timezoneName,
+                    }).format(d);
+                    if (formatted) return formatted;
+                } catch (e) {
+                }
+            }
+
             return `${d.getHours().toString().padStart(2, '0')}:${d.getMinutes().toString().padStart(2, '0')}`;
         },
 
@@ -514,11 +540,18 @@ document.addEventListener('alpine:init', () => {
         },
 
         formatSessionCompactTrainingLoad(session) {
-            if (!session || session.training_load === null || session.training_load === undefined) {
+            if (!session) {
                 return '';
             }
-            const tl = `${Math.round(Number(session.training_load || 0))}`;
-            return tl ? `${tl} TL` : '';
+
+            const movingRaw = Number(session.training_load);
+            const hasMoving = Number.isFinite(movingRaw);
+
+            if (!hasMoving) {
+                return '';
+            }
+
+            return `TL ${Math.round(movingRaw)}`;
         },
 
         formatSessionCompactDistanceAndLoad(session) {
@@ -628,7 +661,7 @@ document.addEventListener('alpine:init', () => {
             const parsed = this.parseStrengthMeta(session.notes);
             this.sessionForm = {
                 ...session,
-                time_str: session.start_time ? this.formatTime(session.start_time) : '',
+                time_str: session.start_time ? this.formatTime(session.start_time, session.timezone_name) : '',
                 notes: parsed.cleanNotes,
                 strength_focuses: parsed.focuses
             };

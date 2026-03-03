@@ -214,7 +214,7 @@ def _render_recent_weeks_summary_text(payload: dict[str, Any]) -> str:
     now_iso = payload.get("now_iso_date")
     weeks = payload.get("weeks") or []
     lines = [f"Recent {len(weeks)} weeks summary (anchor: {now_iso}):"]
-    for item in weeks:
+    for item in reversed(weeks):
         line = (
             f"Week of {_month_day_label(date.fromisoformat(str(item.get('week_start'))))}: "
             f"{item.get('run_trail_distance_km', 0)} km, {item.get('run_trail_elevation_gain_m', 0)} m+ "
@@ -223,12 +223,18 @@ def _render_recent_weeks_summary_text(payload: dict[str, Any]) -> str:
         longest = item.get("longest_run_or_trail")
         if longest:
             line += (
-                f" Longest on {longest.get('weekday')}, {longest.get('distance_km') or 0} km, "
+                f" Longest run on {longest.get('weekday')}, {longest.get('distance_km') or 0} km, "
                 f"{longest.get('elevation_gain_m') or 0} m+ in "
                 f"{_format_duration_hours(int(longest.get('moving_duration_minutes') or longest.get('duration_minutes') or 0))} "
                 f"[session #{longest.get('session_id')}]"
             )
         lines.append(line)
+    if now_iso:
+        try:
+            today = date.fromisoformat(str(now_iso))
+            lines.append(f"We are {_day_label(today)} of this week.")
+        except ValueError:
+            pass
     return "\n".join(lines)
 
 

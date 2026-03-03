@@ -4,7 +4,7 @@ import json
 from dataclasses import dataclass
 from pathlib import Path
 import time
-from typing import Any
+from typing import Any, Literal
 from urllib import error, parse, request
 
 from app.core.config import settings
@@ -251,27 +251,40 @@ class StravaClient:
             return 5
         return 6
 
-    def _extract_heartrate_and_time_streams(self, streams: dict[str, Any]) -> tuple[list[Any] | None, list[Any] | None]:
+    def _extract_heartrate_and_time_streams(
+        self,
+        streams: dict[str, Any],
+    ) -> tuple[list[Any] | None, list[Any] | None, list[Any] | None]:
         heartrate_stream = streams.get("heartrate") if isinstance(streams, dict) else None
         time_stream = streams.get("time") if isinstance(streams, dict) else None
+        moving_stream = streams.get("moving") if isinstance(streams, dict) else None
         heartrate_values = heartrate_stream.get("data") if isinstance(heartrate_stream, dict) else None
         if not isinstance(heartrate_values, list) or len(heartrate_values) == 0:
-            return None, None
+            return None, None, None
         time_values = time_stream.get("data") if isinstance(time_stream, dict) else None
-        return heartrate_values, (time_values if isinstance(time_values, list) else None)
+        moving_values = moving_stream.get("data") if isinstance(moving_stream, dict) else None
+        return (
+            heartrate_values,
+            (time_values if isinstance(time_values, list) else None),
+            (moving_values if isinstance(moving_values, list) else None),
+        )
 
     def _compute_stream_training_metrics(
         self,
         *,
         heartrate_values: list[Any],
         time_values: list[Any] | None,
+        moving_values: list[Any] | None,
         threshold_hr_bpm: float | None,
         max_hr_bpm: float,
+        training_load_mode: Literal["moving", "elapsed"] = "moving",
     ) -> tuple[float, dict[str, int] | None]:
         has_time_values = isinstance(time_values, list) and len(time_values) == len(heartrate_values)
+        has_moving_values = isinstance(moving_values, list) and len(moving_values) == len(heartrate_values)
         zone_seconds = [0, 0, 0, 0, 0, 0, 0] if threshold_hr_bpm is not None and threshold_hr_bpm > 0 else None
 
-        total_load = 0.0
+        total_load_elapsed = 0.0
+        total_load_active = 0.0
         total_points = len(heartrate_values)
         for idx, hr_raw in enumerate(heartrate_values):
             try:
@@ -291,7 +304,17 @@ class StravaClient:
                 sample_seconds = 1
 
             per_hour_load = softplus4_training_load_per_hour(hr_value, max_hr_bpm=max_hr_bpm)
-            total_load += per_hour_load * (float(sample_seconds) / 3600.0)
+            contribution = per_hour_load * (float(sample_seconds) / 3600.0)
+            total_load_elapsed += contribution
+
+            is_active_sample = True
+            if has_moving_values:
+                is_active_sample = bool(moving_values[idx])
+
+            if not is_active_sample:
+                continue
+
+            total_load_active += contribution
 
             if zone_seconds is not None:
                 zone_index = self._get_zone_index_from_hr(hr_value, float(threshold_hr_bpm))
@@ -301,7 +324,12 @@ class StravaClient:
         if zone_seconds is not None:
             zone_payload = {f"zone_{idx}_seconds": int(zone_seconds[idx]) for idx in range(0, 7)}
 
-        return float(round(total_load, 6)), zone_payload
+        if training_load_mode == "elapsed":
+            selected_load = total_load_elapsed
+        else:
+            selected_load = total_load_active if has_moving_values else total_load_elapsed
+
+        return float(round(selected_load, 6)), zone_payload
 
     def get_recent_activities(self, limit: int = 2) -> dict[str, Any]:
         self._ensure_basic_config()
@@ -424,6 +452,7 @@ class StravaClient:
         activity_id: int,
         threshold_hr_bpm: float | None,
         include_streams: bool = False,
+        training_load_mode: Literal["moving", "elapsed"] = "moving",
     ) -> dict[str, Any] | None:
         self._ensure_basic_config()
         normalized_activity_id = int(activity_id)
@@ -434,23 +463,25 @@ class StravaClient:
             auto_refreshed = True
 
         try:
-            streams, _ = self._fetch_activity_streams(normalized_activity_id, keys=["time", "heartrate"])
+            streams, _ = self._fetch_activity_streams(normalized_activity_id, keys=["time", "heartrate", "moving"])
         except StravaAPIError as exc:
             if exc.status_code != 401:
                 raise
             self.refresh_access_token()
             auto_refreshed = True
-            streams, _ = self._fetch_activity_streams(normalized_activity_id, keys=["time", "heartrate"])
+            streams, _ = self._fetch_activity_streams(normalized_activity_id, keys=["time", "heartrate", "moving"])
 
-        heartrate_values, time_values = self._extract_heartrate_and_time_streams(streams)
+        heartrate_values, time_values, moving_values = self._extract_heartrate_and_time_streams(streams)
         if heartrate_values is None:
             return None
 
         training_load, zone_seconds = self._compute_stream_training_metrics(
             heartrate_values=heartrate_values,
             time_values=time_values,
+            moving_values=moving_values,
             threshold_hr_bpm=threshold_hr_bpm,
             max_hr_bpm=float(settings.TRAINING_LOAD_MAX_HR_BPM),
+            training_load_mode=training_load_mode,
         )
 
         if auto_refreshed:
