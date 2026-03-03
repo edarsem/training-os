@@ -1,14 +1,10 @@
 from __future__ import annotations
 
-from app.core.config import settings
 from app.core.database import Base, SessionLocal, engine, run_sqlite_schema_updates
 from app.training_load_recompute import recompute_training_load_full_history
 
 
 def recompute_all() -> None:
-    if settings.TRAINING_LOAD_THRESHOLD_HR_BPM is None:
-        raise RuntimeError("TRAINING_LOAD_THRESHOLD_HR_BPM is missing. Set it in .env.")
-
     Base.metadata.create_all(bind=engine)
     run_sqlite_schema_updates()
 

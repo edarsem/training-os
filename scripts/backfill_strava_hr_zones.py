@@ -1,12 +1,13 @@
 from __future__ import annotations
 
 import argparse
+import json
 from dataclasses import dataclass
+from pathlib import Path
 
-from app.core.config import settings
 from app.core.database import Base, SessionLocal, engine
+from app.core.config import settings
 from app.core.strava import StravaAPIError, StravaClient
-from app.crud import crud
 from app.models import models
 
 
@@ -21,6 +22,8 @@ class BackfillStats:
     skipped_no_activity_id: int = 0
     skipped_no_hr_stream: int = 0
     skipped_stream_error: int = 0
+    streams_saved: int = 0
+    streams_save_error: int = 0
 
 
 def _activity_external_id(activity: dict) -> str | None:
@@ -34,24 +37,26 @@ def _activity_external_id(activity: dict) -> str | None:
     return f"strava:{int(activity_id)}"
 
 
-def _existing_zone_record_has_data(record: models.SessionHRZoneTime | None) -> bool:
-    if not record:
+def _session_has_training_load(session: models.Session | None) -> bool:
+    if session is None:
         return False
-    return (
-        int(record.zone_1_seconds or 0)
-        + int(record.zone_2_seconds or 0)
-        + int(record.zone_3_seconds or 0)
-        + int(record.zone_4_seconds or 0)
-        + int(record.zone_5_seconds or 0)
-        + int(record.zone_6_seconds or 0)
-    ) > 0
+    return session.training_load is not None
 
 
-def backfill_hr_zones(*, max_sessions: int | None, per_page: int, max_pages: int, overwrite: bool) -> BackfillStats:
-    threshold_hr = settings.TRAINING_LOAD_THRESHOLD_HR_BPM
-    if threshold_hr is None:
-        raise RuntimeError("TRAINING_LOAD_THRESHOLD_HR_BPM is missing. Set it in .env before running this script.")
+def _write_stream_file(*, streams_dir: Path, activity_id: int, streams: dict) -> None:
+    streams_dir.mkdir(parents=True, exist_ok=True)
+    out_file = streams_dir / f"{int(activity_id)}.json"
+    out_file.write_text(json.dumps(streams, ensure_ascii=False), encoding="utf-8")
 
+
+def backfill_hr_zones(
+    *,
+    max_sessions: int | None,
+    per_page: int,
+    max_pages: int,
+    overwrite: bool,
+    save_streams_dir: Path | None,
+) -> BackfillStats:
     Base.metadata.create_all(bind=engine)
 
     client = StravaClient()
@@ -87,30 +92,38 @@ def backfill_hr_zones(*, max_sessions: int | None, per_page: int, max_pages: int
 
                 stats.sessions_matched += 1
 
-                existing = db.query(models.SessionHRZoneTime).filter(
-                    models.SessionHRZoneTime.session_id == session.id
-                ).first()
-                if (not overwrite) and _existing_zone_record_has_data(existing):
+                if (not overwrite) and _session_has_training_load(session):
                     stats.skipped_existing += 1
                     continue
 
                 try:
-                    zone_seconds = client.get_activity_hr_zone_seconds(
+                    threshold_hr = settings.TRAINING_LOAD_THRESHOLD_HR_BPM
+                    metrics = client.get_activity_training_metrics(
                         activity_id=int(activity_id),
-                        threshold_hr_bpm=float(threshold_hr),
+                        threshold_hr_bpm=(float(threshold_hr) if threshold_hr is not None else None),
+                        include_streams=(save_streams_dir is not None),
                     )
                 except StravaAPIError:
                     stats.skipped_stream_error += 1
                     continue
-                if not zone_seconds:
+                if not metrics or metrics.get("training_load") is None:
                     stats.skipped_no_hr_stream += 1
                     continue
 
-                crud.upsert_session_hr_zone_time(
-                    db,
-                    session_id=int(session.id),
-                    zone_seconds=zone_seconds,
-                )
+                if save_streams_dir is not None:
+                    streams_payload = metrics.get("streams")
+                    if isinstance(streams_payload, dict):
+                        try:
+                            _write_stream_file(
+                                streams_dir=save_streams_dir,
+                                activity_id=int(activity_id),
+                                streams=streams_payload,
+                            )
+                            stats.streams_saved += 1
+                        except Exception:
+                            stats.streams_save_error += 1
+
+                session.training_load = float(metrics.get("training_load"))
                 db.commit()
                 stats.updated += 1
 
@@ -132,6 +145,12 @@ def main() -> None:
     parser.add_argument("--per-page", type=int, default=50, help="Strava activities fetched per page.")
     parser.add_argument("--max-pages", type=int, default=100, help="Safety cap for pages.")
     parser.add_argument("--overwrite", action="store_true", help="Recompute zone seconds even if already present.")
+    parser.add_argument(
+        "--save-streams-dir",
+        type=Path,
+        default=Path("backend/data/strava_streams_tmp"),
+        help="Directory where raw stream payloads are saved temporarily (empty string disables saving).",
+    )
     args = parser.parse_args()
 
     if args.all:
@@ -139,12 +158,17 @@ def main() -> None:
     else:
         max_sessions = max(1, int(args.limit))
 
+    save_streams_dir: Path | None = args.save_streams_dir
+    if str(save_streams_dir).strip() == "":
+        save_streams_dir = None
+
     try:
         stats = backfill_hr_zones(
             max_sessions=max_sessions,
             per_page=max(1, min(int(args.per_page), 200)),
             max_pages=max(1, int(args.max_pages)),
             overwrite=bool(args.overwrite),
+            save_streams_dir=save_streams_dir,
         )
     except StravaAPIError as exc:
         print(f"ERROR Strava API ({exc.status_code}): {exc}")
@@ -159,7 +183,7 @@ def main() -> None:
         "pages_fetched={pages_fetched} activities_seen={activities_seen} sessions_matched={sessions_matched} "
         "updated={updated} skipped_existing={skipped_existing} skipped_no_session={skipped_no_session} "
         "skipped_no_activity_id={skipped_no_activity_id} skipped_no_hr_stream={skipped_no_hr_stream} "
-        "skipped_stream_error={skipped_stream_error}".format(
+        "skipped_stream_error={skipped_stream_error} streams_saved={streams_saved} streams_save_error={streams_save_error}".format(
             pages_fetched=stats.pages_fetched,
             activities_seen=stats.activities_seen,
             sessions_matched=stats.sessions_matched,
@@ -169,6 +193,8 @@ def main() -> None:
             skipped_no_activity_id=stats.skipped_no_activity_id,
             skipped_no_hr_stream=stats.skipped_no_hr_stream,
             skipped_stream_error=stats.skipped_stream_error,
+            streams_saved=stats.streams_saved,
+            streams_save_error=stats.streams_save_error,
         )
     )
 
