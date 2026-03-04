@@ -21,6 +21,15 @@ def get_session_by_id(db: DBSession, session_id: int) -> Optional[models.Session
     return db.query(models.Session).filter(models.Session.id == session_id).first()
 
 
+def get_race_sessions(db: DBSession) -> List[models.Session]:
+    return (
+        db.query(models.Session)
+        .filter(models.Session.is_race.is_(True))
+        .order_by(models.Session.date.asc(), models.Session.start_time.asc(), models.Session.id.asc())
+        .all()
+    )
+
+
 def get_first_session_date(db: DBSession) -> Optional[date]:
     return db.query(func.min(models.Session.date)).scalar()
 

@@ -307,6 +307,13 @@
                         </div>
                     </div>
 
+                    <div>
+                        <label class="inline-flex items-center gap-2 text-sm text-gray-700">
+                            <input type="checkbox" x-model="sessionForm.is_race" class="rounded border-gray-300 text-blue-600 focus:ring-blue-500">
+                            Mark as race
+                        </label>
+                    </div>
+
                     <div x-show="!sessionForm.id" class="grid grid-cols-2 gap-4">
                         <div>
                             <label class="block text-sm font-medium text-gray-700">Duration (min)</label>
@@ -377,8 +384,13 @@
                             <button type="submit" class="bg-blue-600 text-white py-2 px-4 rounded hover:bg-blue-700 text-sm font-medium">Save</button>
                         </div>
                     </div>
-                    <div x-show="sessionForm.external_id" class="text-[11px] text-gray-500 pt-2 border-t border-gray-100">
-                        Imported from: <span x-text="sessionForm.external_id"></span>
+                    <div class="text-[11px] text-gray-500 pt-2 border-t border-gray-100 flex items-center justify-between">
+                        <div x-show="sessionForm.external_id">
+                            Imported from: <span x-text="sessionForm.external_id"></span>
+                        </div>
+                        <div x-show="sessionForm.id">
+                            Session #<span x-text="sessionForm.id"></span>
+                        </div>
                     </div>
                 </form>
             </div>

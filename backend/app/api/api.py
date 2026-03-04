@@ -3,8 +3,7 @@ import json
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 from typing import List
-from datetime import date, datetime, timedelta, timezone
-from zoneinfo import ZoneInfo
+from datetime import date, datetime, timedelta
 from app.core.database import get_db
 from app.core.config import settings
 from app.core.training_load_defaults import (
@@ -45,9 +44,7 @@ def _map_strava_sport_type_to_session_type(sport_type: str | None) -> str:
         "swim": "swim",
         "weightstraining": "strength",
         "weighttraining": "strength",
-        "workout": "mobility",
-        "indoorcardio": "mobility",
-        "indoor_cardio": "mobility",
+        "workout": "strength",
         "yoga": "mobility",
         "pilates": "mobility",
         "iceskate": "skate",
@@ -56,49 +53,11 @@ def _map_strava_sport_type_to_session_type(sport_type: str | None) -> str:
     return mapping.get(normalized, "other")
 
 
-def _extract_strava_timezone_name(raw_timezone: str | None) -> str | None:
-    if raw_timezone is None:
-        return None
-    text = str(raw_timezone).strip()
-    if not text:
-        return None
-
-    if ")" in text:
-        candidate = text.split(")", 1)[1].strip()
-        if candidate:
-            return candidate
-    return text
-
-
 def _parse_strava_start_date(start_date_raw: str | None) -> datetime | None:
     if not start_date_raw:
         return None
     normalized = start_date_raw.replace("Z", "+00:00")
-    parsed = datetime.fromisoformat(normalized)
-    if parsed.tzinfo is None:
-        parsed = parsed.replace(tzinfo=timezone.utc)
-    return parsed
-
-
-def _compute_activity_local_date(
-    *,
-    start_time_utc: datetime,
-    timezone_name: str | None,
-    start_date_local_raw: str | None,
-) -> date:
-    if start_date_local_raw:
-        local_dt = _parse_strava_start_date(start_date_local_raw)
-        if local_dt is not None:
-            return local_dt.date()
-
-    if timezone_name:
-        try:
-            tz = ZoneInfo(timezone_name)
-            return start_time_utc.astimezone(tz).date()
-        except Exception:
-            pass
-
-    return start_time_utc.date()
+    return datetime.fromisoformat(normalized)
 
 
 def _build_session_notes_from_strava(activity: dict) -> str | None:
@@ -120,16 +79,9 @@ def _map_strava_activity_to_session_payload(activity: dict) -> dict | None:
     if strava_activity_id is None:
         return None
 
-    start_time_utc = _parse_strava_start_date(activity.get("start_date"))
-    if start_time_utc is None:
+    start_time = _parse_strava_start_date(activity.get("start_date"))
+    if start_time is None:
         return None
-
-    timezone_name = _extract_strava_timezone_name(activity.get("timezone"))
-    local_session_date = _compute_activity_local_date(
-        start_time_utc=start_time_utc,
-        timezone_name=timezone_name,
-        start_date_local_raw=activity.get("start_date_local"),
-    )
 
     moving_seconds = activity.get("moving_time_seconds")
     if moving_seconds is None:
@@ -183,9 +135,8 @@ def _map_strava_activity_to_session_payload(activity: dict) -> dict | None:
     return {
         "strava_activity_id": int(strava_activity_id),
         "external_id": external_id,
-        "date": local_session_date,
-        "start_time": start_time_utc,
-        "timezone_name": timezone_name,
+        "date": start_time.date(),
+        "start_time": start_time,
         "mapped_type": mapped_type,
         "duration_minutes": duration_minutes,
         "elapsed_duration_minutes": elapsed_duration_minutes,
@@ -195,7 +146,13 @@ def _map_strava_activity_to_session_payload(activity: dict) -> dict | None:
         "average_pace_min_per_km": average_pace_min_per_km,
         "average_heart_rate_bpm": float(average_heart_rate) if average_heart_rate is not None else None,
         "max_heart_rate_bpm": float(max_heart_rate) if max_heart_rate is not None else None,
+        "is_race": False,
         "training_load": (float(activity.get("training_load")) if activity.get("training_load") is not None else None),
+        "training_load_elapsed": (
+            float(activity.get("training_load_elapsed"))
+            if activity.get("training_load_elapsed") is not None
+            else None
+        ),
         "hr_stream_json": activity.get("hr_stream_json"),
         "notes": notes,
         "name": activity.get("name"),
@@ -227,6 +184,9 @@ def _enrich_activity_for_import(activity: dict, client: StravaClient) -> dict:
             training_load = metrics.get("training_load")
             if training_load is not None:
                 merged["training_load"] = float(training_load)
+            training_load_elapsed = metrics.get("training_load_elapsed")
+            if training_load_elapsed is not None:
+                merged["training_load_elapsed"] = float(training_load_elapsed)
             zone_seconds = metrics.get("zone_seconds")
             if isinstance(zone_seconds, dict):
                 merged["hr_zone_seconds"] = zone_seconds
@@ -267,7 +227,6 @@ def _upsert_strava_activities(
         if existing:
             existing.date = payload["date"]
             existing.start_time = payload["start_time"]
-            existing.timezone_name = payload["timezone_name"]
             existing.type = payload["mapped_type"]
             existing.duration_minutes = payload["duration_minutes"]
             existing.elapsed_duration_minutes = payload["elapsed_duration_minutes"]
@@ -279,6 +238,8 @@ def _upsert_strava_activities(
             existing.max_heart_rate_bpm = payload["max_heart_rate_bpm"]
             if payload["training_load"] is not None:
                 existing.training_load = payload["training_load"]
+            if payload["training_load_elapsed"] is not None:
+                existing.training_load_elapsed = payload["training_load_elapsed"]
             if payload.get("hr_stream_json") is not None:
                 existing.hr_stream_json = payload.get("hr_stream_json")
             existing.notes = payload["notes"]
@@ -290,7 +251,6 @@ def _upsert_strava_activities(
                 date=payload["date"],
                 start_time=payload["start_time"],
                 external_id=payload["external_id"],
-                timezone_name=payload["timezone_name"],
                 type=payload["mapped_type"],
                 duration_minutes=payload["duration_minutes"],
                 elapsed_duration_minutes=payload["elapsed_duration_minutes"],
@@ -300,7 +260,9 @@ def _upsert_strava_activities(
                 average_pace_min_per_km=payload["average_pace_min_per_km"],
                 average_heart_rate_bpm=payload["average_heart_rate_bpm"],
                 max_heart_rate_bpm=payload["max_heart_rate_bpm"],
+                is_race=bool(payload.get("is_race", False)),
                 training_load=payload["training_load"],
+                training_load_elapsed=payload["training_load_elapsed"],
                 hr_stream_json=payload.get("hr_stream_json"),
                 notes=payload["notes"],
             )

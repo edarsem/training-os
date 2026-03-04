@@ -31,6 +31,9 @@ def run_sqlite_schema_updates() -> None:
             conn.execute(text("ALTER TABLE sessions ADD COLUMN training_load_elapsed FLOAT"))
         if "hr_stream_json" not in session_columns:
             conn.execute(text("ALTER TABLE sessions ADD COLUMN hr_stream_json TEXT"))
+        if "is_race" not in session_columns:
+            conn.execute(text("ALTER TABLE sessions ADD COLUMN is_race BOOLEAN NOT NULL DEFAULT 0"))
+        conn.execute(text("UPDATE sessions SET is_race = 0 WHERE is_race IS NULL"))
 
         conn.execute(
             text(

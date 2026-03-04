@@ -36,6 +36,10 @@ def _format_duration_hours(total_minutes: int) -> str:
     return f"{hours}h{str(rem).zfill(2)}"
 
 
+def _format_duration_seconds(total_seconds: int) -> str:
+    return _format_duration_hours(int(round((int(total_seconds or 0)) / 60.0)))
+
+
 def _day_label(value: date) -> str:
     weekdays = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
     return weekdays[value.weekday()]
@@ -273,6 +277,14 @@ def _render_session_details_text(payload: dict[str, Any]) -> str:
         lines.append(f"Intensity: {payload.get('perceived_intensity')}/10")
     if payload.get("notes"):
         lines.append(f"Notes: {payload.get('notes')}")
+
+    hr_zones = payload.get("hr_zones") or {}
+    zone_values = [int(hr_zones.get(f"zone_{idx}_seconds") or 0) for idx in range(7)]
+    if any(value > 0 for value in zone_values):
+        lines.append("HR zones:")
+        for idx, seconds in enumerate(zone_values):
+            if seconds > 0:
+                lines.append(f"- Z{idx}: {_format_duration_seconds(seconds)}")
     return "\n".join(lines)
 
 
@@ -332,7 +344,7 @@ def _render_block_summary_text(payload: dict[str, Any]) -> str:
 def _render_recent_weeks_summary_text(payload: dict[str, Any]) -> str:
     now_iso = payload.get("now_iso_date")
     weeks = payload.get("weeks") or []
-    lines = [f"Recent {len(weeks)} weeks summary (anchor: {now_iso}):"]
+    lines = [f"Recent {len(weeks)} weeks summary (today: {now_iso}):"]
     for item in reversed(weeks):
         line = (
             f"Week of {_month_day_label(date.fromisoformat(str(item.get('week_start'))))}: "
@@ -340,17 +352,33 @@ def _render_recent_weeks_summary_text(payload: dict[str, Any]) -> str:
         )
         if item.get("is_current_week"):
             line += f" We are {item.get('current_week_day')} of this week."
+        lines.append(line)
+
+        lines.append(
+            (
+                f"Totals: {item.get('total_sessions', 0)} sessions, "
+                f"{_fmt_distance_km(item.get('total_distance_km', 0), session_type='run')} km run/trail, "
+                f"{_fmt_elevation_m(item.get('total_elevation_gain_m', 0))} m+, "
+                f"TL {_fmt_metric(item.get('total_training_load'), 0)}"
+            )
+        )
+
         salient = item.get("salient_sessions") or []
         threshold = item.get("salient_threshold")
         if threshold is not None:
-            line += f" Salient (TL ≥ {_fmt_metric(threshold, 0)}): {len(salient)}"
-        if salient:
-            top = salient[0]
-            line += (
-                f". Top salient: {top.get('weekday')}, {top.get('type')} TL {_fmt_metric(top.get('training_load'), 0)} "
-                f"[session #{top.get('session_id')}]"
+            lines.append(f"Salient sessions (TL ≥ {_fmt_metric(threshold, 0)}): {len(salient)}")
+        elif item.get("salient_mode") == "all":
+            lines.append(f"Sessions: {len(salient)}")
+
+        for session in salient:
+            session_line = (
+                f"- {session.get('date')} {session.get('weekday')}: {session.get('type')} "
+                f"TL {_fmt_metric(session.get('training_load'), 0)} [session #{session.get('session_id')}]"
             )
-        lines.append(line)
+            lines.append(session_line)
+
+        if threshold is not None and not salient:
+            lines.append("- none")
     return "\n".join(lines)
 
 
@@ -382,6 +410,23 @@ def _render_salient_sessions_text(payload: dict[str, Any]) -> str:
         line += f" [session #{item.get('id')}]"
         lines.append(line)
 
+    return "\n".join(lines)
+
+
+def _render_all_races_text(payload: dict[str, Any]) -> str:
+    races = payload.get("races") or []
+    lines = [f"All races: {len(races)}"]
+    for item in races:
+        line = (
+            f"- {item.get('date')} | session #{item.get('session_id')} | {item.get('type')} | "
+            f"distance {item.get('distance_km')} km | elevation {item.get('elevation_gain_m')} m+ | "
+            f"moving {item.get('moving_time')} | elapsed {item.get('elapsed_time')} | TL {item.get('training_load')}"
+        )
+        if item.get("note"):
+            line += f" | note: {item.get('note')}"
+        if item.get("day_note"):
+            line += f" | day note: {item.get('day_note')}"
+        lines.append(line)
     return "\n".join(lines)
 
 
@@ -703,6 +748,17 @@ def get_session_details_tool(
             "session_id": int(session_id),
         }
 
+    hr_zone_map = crud.get_session_hr_zone_time_map(db, [int(session.id)])
+    hr_zones = hr_zone_map.get(int(session.id)) or {
+        "zone_0_seconds": 0,
+        "zone_1_seconds": 0,
+        "zone_2_seconds": 0,
+        "zone_3_seconds": 0,
+        "zone_4_seconds": 0,
+        "zone_5_seconds": 0,
+        "zone_6_seconds": 0,
+    }
+
     payload = {
         "id": session.id,
         "external_id": session.external_id,
@@ -719,6 +775,7 @@ def get_session_details_tool(
         "max_heart_rate_bpm": session.max_heart_rate_bpm,
         "perceived_intensity": session.perceived_intensity,
         "notes": session.notes,
+        "hr_zones": hr_zones,
     }
 
     if output_mode == "json":
@@ -844,6 +901,9 @@ def get_recent_weeks_summary_tool(
         week_shape = _compute_shape_snapshot(db, on_date=week_start)
         selected_sessions, salient_meta = _filter_salient_sessions(week_sessions, include_sessions)
         threshold = salient_meta.get("threshold") if salient_meta.get("mode") == "threshold" else None
+        total_distance = round(sum((s.distance_km or 0) for s in week_sessions if s.type in ["run", "trail"]), 1)
+        total_elevation = int(sum((s.elevation_gain_m or 0) for s in week_sessions if s.type in ["run", "trail", "hike"]))
+        total_training_load = round(sum((_to_float_or_none(s.training_load) or 0.0) for s in week_sessions), 0)
 
         weeks.append(
             {
@@ -853,7 +913,12 @@ def get_recent_weeks_summary_tool(
                 "shape_ctl": week_shape.get("shape_ctl"),
                 "is_current_week": week_start == current_week_start,
                 "current_week_day": _day_label(now_date) if week_start == current_week_start else None,
+                "salient_mode": salient_meta.get("mode"),
                 "salient_threshold": threshold,
+                "total_sessions": len(week_sessions),
+                "total_distance_km": total_distance,
+                "total_elevation_gain_m": total_elevation,
+                "total_training_load": total_training_load,
                 "salient_sessions": [
                     {
                         "session_id": s.id,
@@ -949,6 +1014,45 @@ def get_salient_sessions_tool(
         return payload
 
     return {"text": _render_salient_sessions_text(payload)}
+
+
+def get_all_races_tool(
+    db: DBSession,
+    *,
+    output_mode: str = "text",
+) -> dict[str, Any]:
+    races = crud.get_race_sessions(db)
+    day_notes_map = {
+        str(item.date): item.note
+        for item in crud.get_day_notes_by_date_range(
+            db,
+            min((race.date for race in races), default=date.today()),
+            max((race.date for race in races), default=date.today()),
+        )
+    }
+
+    payload = {
+        "races": [
+            {
+                "date": race.date.isoformat(),
+                "session_id": race.id,
+                "type": race.type,
+                "distance_km": _fmt_distance_km(race.distance_km, session_type=race.type),
+                "elevation_gain_m": _fmt_elevation_m(race.elevation_gain_m),
+                "moving_time": _format_duration_hours(int(race.moving_duration_minutes or race.duration_minutes or 0)),
+                "elapsed_time": _format_duration_hours(int(race.elapsed_duration_minutes or race.duration_minutes or 0)),
+                "training_load": _fmt_metric(race.training_load, 0),
+                "note": _truncate_text(race.notes, max_chars=220),
+                "day_note": day_notes_map.get(str(race.date)) or None,
+            }
+            for race in races
+        ]
+    }
+
+    if output_mode == "json":
+        return payload
+
+    return {"text": _render_all_races_text(payload)}
 
 
 def get_mcp_tools_schema() -> list[dict[str, Any]]:
@@ -1062,6 +1166,19 @@ def get_mcp_tools_schema() -> list[dict[str, Any]]:
                         "limit": {"type": "integer", "minimum": 1, "maximum": 200, "default": 50},
                     },
                     "required": ["start_iso", "end_iso"],
+                    "additionalProperties": False,
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "get_all_races",
+                "description": "Get all sessions marked as race, oldest to newest, including date, session id, distance, elevation, moving/elapsed time, training load, note, and day note.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {},
+                    "required": [],
                     "additionalProperties": False,
                 },
             },
@@ -1216,6 +1333,12 @@ def execute_mcp_tool(
             training_load_threshold=float(arguments.get("training_load_threshold", 150.0)),
             limit=int(arguments.get("limit", 50)),
             temporal_resolution=temporal_resolution,
+            output_mode="text",
+        )
+
+    if name == "get_all_races":
+        return get_all_races_tool(
+            db,
             output_mode="text",
         )
 

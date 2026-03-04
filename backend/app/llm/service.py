@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import re
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
@@ -194,11 +193,13 @@ class TrainingOSLLMService:
             "now_iso_date": now_iso,
             "locale": language,
             "instruction": (
-                "Use tools to fetch the required data and context to answer the user query accurately. "
+                "Use tools to fetch context and required data to answer the user query accurately. "
                 "Call tools with explicit ISO dates/ranges only, using the published tool parameters. "
                 "If the user uses relative dates (e.g., last monday, last month), resolve them against current_utc_date and pass ISO values to tools. "
                 "Requesting on a narrow level (session, day) gives more granular data, requesting on a broad level (week, block) gives aggregated data. "
-                "When done with tool calls, call submit_final_answer with no arguments."
+                "Request broad level first to get context / overview, then narrow to a day or session if you want specifics. "
+                "At any time, you can reason with the data you have and decide what to do or say next, and therefore build up to a better decision. "
+                "When done with tool calls and ready to answer the user query, call submit_final_answer with no arguments."
             ),
         }
         user_message_content = json.dumps(user_payload, ensure_ascii=False)
@@ -208,7 +209,7 @@ class TrainingOSLLMService:
                 "role": "system",
                 "content": (
                     f"{system_prompt}\n\n"
-                    f"Current UTC date anchor: {now_iso}.\n"
+                    f"Current UTC date today: {now_iso}.\n"
                     "MCP mode is enabled. You MUST use tools when data is needed. "
                     "Do not claim missing data before trying appropriate tools. "
                     "Prefer minimal tool calls and minimal data volume."
@@ -222,6 +223,7 @@ class TrainingOSLLMService:
         usage_aggregate: dict[str, Any] = {}
         answer = ""
         submit_final_answer_called = False
+        consecutive_non_tool_turns = 0
         max_calls = int(settings.LLM_MCP_MAX_TOOL_CALLS)
 
         for _ in range(max_calls + 1):
@@ -250,6 +252,7 @@ class TrainingOSLLMService:
             assistant_content = str(assistant_content or "").strip()
 
             if tool_calls:
+                consecutive_non_tool_turns = 0
                 messages.append(
                     {
                         "role": "assistant",
@@ -337,10 +340,25 @@ class TrainingOSLLMService:
                         "content": assistant_content,
                     }
                 )
+                consecutive_non_tool_turns += 1
+
+                if consecutive_non_tool_turns >= 2:
+                    messages.append(
+                        {
+                            "role": "user",
+                            "content": (
+                                "Continue by either calling another tool (for broader context or narrower specifics) "
+                                "or call submit_final_answer if you have enough information."
+                            ),
+                        }
+                    )
                 messages.append(
                     {
                         "role": "user",
-                        "content": "Finalize now by calling submit_final_answer with no arguments.",
+                        "content": (
+                            "You can continue with more tools if needed. "
+                            "Call submit_final_answer with no arguments only when you are ready to finalize."
+                        ),
                     }
                 )
                 continue
@@ -351,6 +369,7 @@ class TrainingOSLLMService:
                 "now_iso_date": now_iso,
                 "language": language,
                 "tool_results": [entry for entry in mcp_trace if entry.get("type") == "tool_call" and entry.get("name") != "submit_final_answer"],
+                "assistant_intermediate": [entry.get("content") for entry in mcp_trace if entry.get("type") == "assistant_intermediate"],
                 "instruction": (
                     "Write the final answer for the user using only these tool results. "
                     "Do not invent data. If a needed value is missing, say it clearly."
@@ -430,72 +449,6 @@ class TrainingOSLLMService:
         language: str,
     ) -> dict[str, Any]:
         now_date = datetime.fromisoformat(now_iso_date).date()
-        normalized = str(query or "").strip().lower()
-
-        if normalized in {"la semaine dernière", "semaine dernière", "semaine derniere", "last week"}:
-            this_week_monday = now_date - timedelta(days=now_date.weekday())
-            last_week_monday = this_week_monday - timedelta(days=7)
-            last_week_sunday = last_week_monday + timedelta(days=6)
-            return {
-                "mode": "range",
-                "range_start_iso": last_week_monday.isoformat(),
-                "range_end_iso": last_week_sunday.isoformat(),
-                "label": query,
-                "resolution_source": "deterministic",
-            }
-
-        month_map = {
-            "janvier": 1,
-            "février": 2,
-            "fevrier": 2,
-            "mars": 3,
-            "avril": 4,
-            "mai": 5,
-            "juin": 6,
-            "juillet": 7,
-            "août": 8,
-            "aout": 8,
-            "septembre": 9,
-            "octobre": 10,
-            "novembre": 11,
-            "décembre": 12,
-            "decembre": 12,
-            "january": 1,
-            "february": 2,
-            "march": 3,
-            "april": 4,
-            "may": 5,
-            "june": 6,
-            "july": 7,
-            "august": 8,
-            "september": 9,
-            "october": 10,
-            "november": 11,
-            "december": 12,
-        }
-        for month_label, month_num in month_map.items():
-            if re.search(rf"\b{re.escape(month_label)}\b", normalized):
-                year_match = re.search(r"\b(20\d{2})\b", normalized)
-                if year_match:
-                    year = int(year_match.group(1))
-                else:
-                    year = now_date.year
-                    if month_num > now_date.month:
-                        year -= 1
-
-                start_date = datetime(year, month_num, 1).date()
-                if month_num == 12:
-                    end_date = datetime(year + 1, 1, 1).date() - timedelta(days=1)
-                else:
-                    end_date = datetime(year, month_num + 1, 1).date() - timedelta(days=1)
-
-                return {
-                    "mode": "range",
-                    "range_start_iso": start_date.isoformat(),
-                    "range_end_iso": end_date.isoformat(),
-                    "label": query,
-                    "resolution_source": "deterministic",
-                }
 
         current_week_start = now_date - timedelta(days=now_date.weekday())
         week_starts = [

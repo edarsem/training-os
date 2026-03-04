@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, Float, Date, Text, DateTime, ForeignKey
+from sqlalchemy import Column, Integer, String, Float, Date, Text, DateTime, ForeignKey, Boolean
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 from app.core.database import Base
@@ -21,6 +21,7 @@ class Session(Base):
     average_heart_rate_bpm = Column(Float, nullable=True)
     max_heart_rate_bpm = Column(Float, nullable=True)
     perceived_intensity = Column(Integer, nullable=True) # 1-10
+    is_race = Column(Boolean, nullable=False, default=False)
     training_load = Column(Float, nullable=True)
     training_load_elapsed = Column(Float, nullable=True)
     hr_stream_json = Column(Text, nullable=True)
