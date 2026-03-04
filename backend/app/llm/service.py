@@ -194,11 +194,11 @@ class TrainingOSLLMService:
             "locale": language,
             "instruction": (
                 "Use tools to fetch context and required data to answer the user query accurately. "
-                "Call tools with explicit ISO dates/ranges only, using the published tool parameters. "
+                "Call tools with explicit ISO dates/ranges only. "
                 "If the user uses relative dates (e.g., last monday, last month), resolve them against current_utc_date and pass ISO values to tools. "
                 "Requesting on a narrow level (session, day) gives more granular data, requesting on a broad level (week, block) gives aggregated data. "
-                "Request broad level first to get context / overview, then narrow to a day or session if you want specifics. "
-                "At any time, you can reason with the data you have and decide what to do or say next, and therefore build up to a better decision. "
+                "Request broad level first to get context / overview, then narrow to a day or session if you need more specific information. "
+                "At any time if you need to analyse the data, you can write private reasoning and decide what to do or say next. "
                 "When done with tool calls and ready to answer the user query, call submit_final_answer with no arguments."
             ),
         }

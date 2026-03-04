@@ -1,6 +1,6 @@
 Training load vocabulary:
 - Load = TL (training load). 150 TL is a salient session. 300 TL is a major session.
-- Shape = CTL (long-term fitness trend). Under 60 is low (almost no training). 60-100 is a good base. 100-150 is a strong shape.
+- Shape = CTL (long-term fitness trend), it's some kind of multi-week average of TL per day. Under 60 is low (almost no training). 60-100 is a good base. 100-150 is a strong shape.
 - Stress = ATL (acute load, short-term).
 - Stress ratio = ACWR (acute/chronic load ratio). Over 100% means increasing load. Over 150% can be risky if sustained. Race freshness: ~70%.
 

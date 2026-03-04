@@ -519,22 +519,14 @@ document.addEventListener('alpine:init', () => {
             }
 
             const movingRaw = Number(session.training_load);
-            const elapsedRaw = Number(session.training_load_elapsed);
             const hasMoving = Number.isFinite(movingRaw);
-            const hasElapsed = Number.isFinite(elapsedRaw);
 
-            if (!hasMoving && !hasElapsed) {
+            if (!hasMoving) {
                 return '';
             }
 
             const movingTl = hasMoving ? `${Math.round(movingRaw)}` : '—';
-            const elapsedTl = hasElapsed ? `${Math.round(elapsedRaw)}` : '—';
-
-            if (hasMoving && hasElapsed) {
-                return `TL m:${movingTl} / e:${elapsedTl}`;
-            }
-
-            return hasMoving ? `TL ${movingTl}` : `TL e:${elapsedTl}`;
+            return `TL ${movingTl}`;
         },
 
         formatSessionCompactDistanceAndLoad(session) {
