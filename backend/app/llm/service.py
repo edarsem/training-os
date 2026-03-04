@@ -194,10 +194,9 @@ class TrainingOSLLMService:
             "now_iso_date": now_iso,
             "locale": language,
             "instruction": (
-                "Use tools to fetch only the minimum data required to answer accurately. "
-                "Prefer calling data tools directly with explicit ISO dates/ranges whenever you can infer them from the user query. "
-                "Use temporal_ref only when ISO values are not explicit or are relative/ambiguous (e.g., last monday, last month). "
-                "If you call resolve_time_reference, pass only the unresolved time expression in temporal_ref (example: 'la semaine dernière'), never the full user question. "
+                "Use tools to fetch the required data and context to answer the user query accurately. "
+                "Call tools with explicit ISO dates/ranges only, using the published tool parameters. "
+                "If the user uses relative dates (e.g., last monday, last month), resolve them against current_utc_date and pass ISO values to tools. "
                 "Requesting on a narrow level (session, day) gives more granular data, requesting on a broad level (week, block) gives aggregated data. "
                 "When done with tool calls, call submit_final_answer with no arguments."
             ),
