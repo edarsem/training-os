@@ -165,13 +165,12 @@ def _render_week_summary_text(payload: dict[str, Any]) -> str:
         f"{payload.get('date_start')} to {payload.get('date_end')} week summary:",
         (
             f"Week starts with Shape (CTL): {_fmt_metric(week_shape.get('shape_ctl'), 0)}. "
-            f"(Snapshot date: {week_shape.get('date')})."
         ),
     ]
     current_week_day = payload.get("current_week_day")
     if current_week_day:
         lines.append(f"We are {current_week_day} of this week.")
-    lines.append(f"Secondary context: {totals.get('total_sessions', 0)} sessions.")
+    lines.append(f"Context: {totals.get('total_sessions', 0)} sessions.")
 
     plan = payload.get("plan") or {}
     lines.append(f"Week plan: {plan.get('description') or 'None'}")
@@ -220,7 +219,6 @@ def _render_day_details_text(payload: dict[str, Any]) -> str:
         f"{payload.get('date')} day details:",
         (
             f"Shape (CTL): {_fmt_metric(day_shape.get('shape_ctl'))}, Stress ratio (ACWR): {_fmt_metric(day_shape.get('acwr'), 0)} "
-            f"(snapshot date: {day_shape.get('date')})."
         ),
         (
             f"{totals.get('total_sessions', 0)} sessions, "
@@ -304,7 +302,7 @@ def _render_block_summary_text(payload: dict[str, Any]) -> str:
         lines.append(f"Current week is included in this block. We are {current_week_day} of the week.")
 
     lines.append(
-        f"Context (secondary): {payload.get('total_sessions', 0)} sessions, {payload.get('active_training_days', 0)} active days."
+        f"Context : {payload.get('total_sessions', 0)} sessions, {payload.get('active_training_days', 0)} active days."
     )
 
     salient_sessions = payload.get("salient_sessions") or []
