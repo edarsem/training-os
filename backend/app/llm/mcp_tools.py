@@ -54,6 +54,21 @@ def _month_day_label(value: date) -> str:
     return f"{value.strftime('%B')} {_ordinal_day(value)}"
 
 
+def _parse_now_date(now_iso_date: str | None) -> date:
+    if now_iso_date:
+        try:
+            return date.fromisoformat(str(now_iso_date))
+        except ValueError:
+            pass
+    return date.today()
+
+
+def _is_same_iso_week(a: date, b: date) -> bool:
+    a_iso = a.isocalendar()
+    b_iso = b.isocalendar()
+    return int(a_iso[0]) == int(b_iso[0]) and int(a_iso[1]) == int(b_iso[1])
+
+
 def _to_float_or_none(value: Any) -> float | None:
     if value is None:
         return None
@@ -149,7 +164,9 @@ def _render_week_summary_text(payload: dict[str, Any]) -> str:
             f"(Snapshot date: {week_shape.get('date')})."
         ),
     ]
-    lines.append("Reference: Shape = CTL (long-term fitness).")
+    current_week_day = payload.get("current_week_day")
+    if current_week_day:
+        lines.append(f"We are {current_week_day} of this week.")
     lines.append(f"Secondary context: {totals.get('total_sessions', 0)} sessions.")
 
     plan = payload.get("plan") or {}
@@ -212,6 +229,10 @@ def _render_day_details_text(payload: dict[str, Any]) -> str:
     if day_note:
         lines.append(f"Day note: {day_note}")
 
+    current_day_label = payload.get("current_day_label")
+    if current_day_label:
+        lines.append(f"We are {current_day_label}.")
+
     sessions = payload.get("sessions") or []
     if sessions:
         lines.append("Sessions:")
@@ -264,8 +285,11 @@ def _render_block_summary_text(payload: dict[str, Any]) -> str:
             f"(Δ {_fmt_metric(shape.get('shape_change_ctl'))})."
         ),
         f"Average Stress ratio (ACWR) across block: {_fmt_metric(shape.get('avg_acwr'), 0)}",
-        "Reference: Shape = CTL (long-term fitness), Stress ratio = ACWR.",
     ]
+
+    current_week_day = payload.get("current_week_day")
+    if current_week_day:
+        lines.append(f"Current week is included in this block. We are {current_week_day} of the week.")
 
     lines.append(
         f"Context (secondary): {payload.get('total_sessions', 0)} sessions, {payload.get('active_training_days', 0)} active days."
@@ -314,6 +338,8 @@ def _render_recent_weeks_summary_text(payload: dict[str, Any]) -> str:
             f"Week of {_month_day_label(date.fromisoformat(str(item.get('week_start'))))}: "
             f"Shape (CTL) {_fmt_metric(item.get('shape_ctl'), 0)}."
         )
+        if item.get("is_current_week"):
+            line += f" We are {item.get('current_week_day')} of this week."
         salient = item.get("salient_sessions") or []
         threshold = item.get("salient_threshold")
         if threshold is not None:
@@ -325,13 +351,6 @@ def _render_recent_weeks_summary_text(payload: dict[str, Any]) -> str:
                 f"[session #{top.get('session_id')}]"
             )
         lines.append(line)
-    lines.append("Reference: Shape = CTL (long-term fitness).")
-    if now_iso:
-        try:
-            today = date.fromisoformat(str(now_iso))
-            lines.append(f"We are {_day_label(today)} of this week.")
-        except ValueError:
-            pass
     return "\n".join(lines)
 
 
@@ -350,7 +369,6 @@ def _render_salient_sessions_text(payload: dict[str, Any]) -> str:
         f"Shape (CTL) start→end: {_fmt_metric(shape.get('shape_ctl_start'))} → {_fmt_metric(shape.get('shape_ctl_end'))} | "
         f"Average Stress ratio (ACWR): {_fmt_metric(shape.get('avg_acwr'), 0)}"
     )
-    lines.append("Reference: Shape = CTL (long-term fitness), Stress ratio = ACWR.")
 
     for item in payload.get("sessions") or []:
         line = (
@@ -545,10 +563,12 @@ def get_week_summary_tool(
     *,
     date_iso: str,
     include_sessions: bool | int | float = False,
+    now_iso_date: str | None = None,
     temporal_resolution: dict[str, Any] | None = None,
     output_mode: str = "text",
 ) -> dict[str, Any]:
     reference_date = date.fromisoformat(date_iso)
+    now_date = _parse_now_date(now_iso_date)
     anchor_year, anchor_week = _iso_anchor_from_date(reference_date)
     start_date, end_date = _week_window(anchor_year, anchor_week)
     sessions = crud.get_sessions_by_date_range(db, start_date, end_date)
@@ -585,6 +605,9 @@ def get_week_summary_tool(
         ],
     }
 
+    if _is_same_iso_week(reference_date, now_date):
+        payload["current_week_day"] = _day_label(now_date)
+
     selected_sessions, salient_meta = _filter_salient_sessions(sessions, include_sessions)
     payload["salient_sessions_meta"] = salient_meta
     if selected_sessions:
@@ -617,10 +640,12 @@ def get_day_details_tool(
     *,
     date_iso: str,
     truncate_notes_chars: int = 220,
+    now_iso_date: str | None = None,
     temporal_resolution: dict[str, Any] | None = None,
     output_mode: str = "text",
 ) -> dict[str, Any]:
     target_date = date.fromisoformat(date_iso)
+    now_date = _parse_now_date(now_iso_date)
     sessions = crud.get_sessions_by_date_range(db, target_date, target_date)
     day_note = crud.get_day_note(db, target_date)
 
@@ -652,6 +677,9 @@ def get_day_details_tool(
             for s in sessions
         ],
     }
+
+    if target_date == now_date:
+        payload["current_day_label"] = _day_label(now_date)
 
     if temporal_resolution:
         payload["temporal_resolution"] = temporal_resolution
@@ -705,11 +733,13 @@ def get_block_summary_tool(
     start_iso: str,
     end_iso: str,
     include_sessions: bool | int | float = 150,
+    now_iso_date: str | None = None,
     temporal_resolution: dict[str, Any] | None = None,
     output_mode: str = "text",
 ) -> dict[str, Any]:
     start_date = date.fromisoformat(start_iso)
     end_date = date.fromisoformat(end_iso)
+    now_date = _parse_now_date(now_iso_date)
     if end_date < start_date:
         start_date, end_date = end_date, start_date
 
@@ -779,6 +809,11 @@ def get_block_summary_tool(
         ],
     }
 
+    current_week_start = now_date - timedelta(days=now_date.weekday())
+    current_week_end = current_week_start + timedelta(days=6)
+    if start_date <= current_week_end and end_date >= current_week_start:
+        payload["current_week_day"] = _day_label(now_date)
+
     if temporal_resolution:
         payload["temporal_resolution"] = temporal_resolution
 
@@ -797,7 +832,7 @@ def get_recent_weeks_summary_tool(
     output_mode: str = "text",
 ) -> dict[str, Any]:
     count = max(1, min(int(weeks_count), 24))
-    now_date = date.fromisoformat(now_iso_date) if now_iso_date else date.today()
+    now_date = _parse_now_date(now_iso_date)
     current_week_start = now_date - timedelta(days=now_date.weekday())
 
     weeks: list[dict[str, Any]] = []
@@ -816,6 +851,8 @@ def get_recent_weeks_summary_tool(
                 "week_end": week_end.isoformat(),
                 "effective_end": effective_end.isoformat(),
                 "shape_ctl": week_shape.get("shape_ctl"),
+                "is_current_week": week_start == current_week_start,
+                "current_week_day": _day_label(now_date) if week_start == current_week_start else None,
                 "salient_threshold": threshold,
                 "salient_sessions": [
                     {
@@ -920,14 +957,11 @@ def get_mcp_tools_schema() -> list[dict[str, Any]]:
             "type": "function",
             "function": {
                 "name": "get_week_summary",
-                "description": "Get a compact week summary centered on Shape (CTL at week start), with optional salient sessions. include_sessions accepts false (none), true (all), or a numeric TL threshold.",
+                "description": "Get a compact week summary of the week (Monday to Sunday) that includes the given date. include_sessions defaults accepts false (none, default), true (all), or a numeric TL threshold.",
                 "parameters": {
                     "type": "object",
                     "properties": {
                         "date_iso": {"type": "string"},
-                        "temporal_ref": {"type": "string"},
-                        "now_iso_date": {"type": "string"},
-                        "language": {"type": "string"},
                         "include_sessions": {
                             "anyOf": [
                                 {"type": "boolean"},
@@ -935,7 +969,7 @@ def get_mcp_tools_schema() -> list[dict[str, Any]]:
                             ]
                         },
                     },
-                    "required": [],
+                    "required": ["date_iso"],
                     "additionalProperties": False,
                 },
             },
@@ -944,17 +978,14 @@ def get_mcp_tools_schema() -> list[dict[str, Any]]:
             "type": "function",
             "function": {
                 "name": "get_day_details",
-                "description": "Get details for one day, including per-session details with moving time and truncated notes. Use date_iso when possible; otherwise temporal_ref + now_iso_date.",
+                "description": "Get a detailed summary for one day, including per-session details with moving time and truncated notes.",
                 "parameters": {
                     "type": "object",
                     "properties": {
                         "date_iso": {"type": "string"},
-                        "temporal_ref": {"type": "string"},
-                        "now_iso_date": {"type": "string"},
-                        "language": {"type": "string"},
                         "truncate_notes_chars": {"type": "integer", "minimum": 40, "maximum": 1000},
                     },
-                    "required": [],
+                    "required": ["date_iso"],
                     "additionalProperties": False,
                 },
             },
@@ -963,7 +994,7 @@ def get_mcp_tools_schema() -> list[dict[str, Any]]:
             "type": "function",
             "function": {
                 "name": "get_session_details",
-                "description": "Get all available details for one session by session id.",
+                "description": "Get a detailed summary for one session by session id.",
                 "parameters": {
                     "type": "object",
                     "properties": {
@@ -978,15 +1009,12 @@ def get_mcp_tools_schema() -> list[dict[str, Any]]:
             "type": "function",
             "function": {
                 "name": "get_block_summary",
-                "description": "Get a compact block summary with Shape evolution (start/end CTL), average ACWR, and optional salient sessions. include_sessions accepts false (none), true (all), or numeric TL threshold.",
+                "description": "Get a compact block summary with Shape evolution (start/end CTL), average ACWR, and optional salient sessions. include_sessions accepts false (none, default), true (all), or a numeric TL threshold.",
                 "parameters": {
                     "type": "object",
                     "properties": {
                         "start_iso": {"type": "string"},
                         "end_iso": {"type": "string"},
-                        "temporal_ref": {"type": "string"},
-                        "now_iso_date": {"type": "string"},
-                        "language": {"type": "string"},
                         "include_sessions": {
                             "anyOf": [
                                 {"type": "boolean"},
@@ -994,7 +1022,7 @@ def get_mcp_tools_schema() -> list[dict[str, Any]]:
                             ]
                         },
                     },
-                    "required": [],
+                    "required": ["start_iso", "end_iso"],
                     "additionalProperties": False,
                 },
             },
@@ -1003,12 +1031,11 @@ def get_mcp_tools_schema() -> list[dict[str, Any]]:
             "type": "function",
             "function": {
                 "name": "get_recent_weeks_summary",
-                "description": "Get recent weeks from oldest to newest with weekly Shape (CTL) and optional salient sessions by TL threshold.",
+                "description": "Get recent weeks from oldest to newest with weekly Shape (CTL) and optional salient sessions. include_sessions accepts false (none), true (all), or a numeric TL threshold.",
                 "parameters": {
                     "type": "object",
                     "properties": {
                         "weeks_count": {"type": "integer", "minimum": 1, "maximum": 24},
-                        "now_iso_date": {"type": "string"},
                         "include_sessions": {
                             "anyOf": [
                                 {"type": "boolean"},
@@ -1025,19 +1052,16 @@ def get_mcp_tools_schema() -> list[dict[str, Any]]:
             "type": "function",
             "function": {
                 "name": "get_salient_sessions",
-                "description": "List sessions in a date range that beat a TL threshold (default 150), returned oldest to newest. If limit truncates results, reported threshold is the minimum TL among returned sessions.",
+                "description": "Get salient sessions in a period: sessions in the date range with training load at or above training_load_threshold (default 150), capped by limit (default 50).",
                 "parameters": {
                     "type": "object",
                     "properties": {
                         "start_iso": {"type": "string"},
                         "end_iso": {"type": "string"},
-                        "temporal_ref": {"type": "string"},
-                        "now_iso_date": {"type": "string"},
-                        "language": {"type": "string"},
                         "training_load_threshold": {"type": "number", "minimum": 0, "default": 150},
                         "limit": {"type": "integer", "minimum": 1, "maximum": 200, "default": 50},
                     },
-                    "required": [],
+                    "required": ["start_iso", "end_iso"],
                     "additionalProperties": False,
                 },
             },
@@ -1100,6 +1124,7 @@ def execute_mcp_tool(
             db,
             date_iso=date_iso,
             include_sessions=include_sessions,
+            now_iso_date=str(arguments.get("now_iso_date") or "") or None,
             temporal_resolution=temporal_resolution,
             output_mode="text",
         )
@@ -1122,6 +1147,7 @@ def execute_mcp_tool(
             db,
             date_iso=date_iso,
             truncate_notes_chars=truncate_notes_chars,
+            now_iso_date=str(arguments.get("now_iso_date") or "") or None,
             temporal_resolution=temporal_resolution,
             output_mode="text",
         )
@@ -1153,6 +1179,7 @@ def execute_mcp_tool(
             start_iso=start_iso,
             end_iso=end_iso,
             include_sessions=arguments.get("include_sessions", 150),
+            now_iso_date=str(arguments.get("now_iso_date") or "") or None,
             temporal_resolution=temporal_resolution,
             output_mode="text",
         )
