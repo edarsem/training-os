@@ -12,6 +12,9 @@ from app.core.training_load_defaults import DEFAULT_TRAINING_LOAD_ZONE_BOUNDARIE
 from app.core.training_load_defaults import softplus4_training_load_per_hour
 
 
+MAX_STREAM_SAMPLE_SECONDS = 10
+
+
 class StravaConfigError(RuntimeError):
     pass
 
@@ -299,7 +302,7 @@ class StravaClient:
                     dt = int(time_values[idx + 1]) - int(time_values[idx])
                 except (TypeError, ValueError):
                     dt = 1
-                sample_seconds = max(1, dt)
+                sample_seconds = min(MAX_STREAM_SAMPLE_SECONDS, max(1, dt))
             else:
                 sample_seconds = 1
 
