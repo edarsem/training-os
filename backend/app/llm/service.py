@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session as DBSession
 
 from app.core.config import settings
 from app.llm.mcp_tools import execute_mcp_tool, get_mcp_tools_schema
+from app.llm.profile_prompt_compiler import ensure_compiled_profile_prompt
 from app.llm.prompt_loader import PromptRepository
 from app.llm.providers import LLMConfigurationError, LLMProviderError, build_provider
 from app.llm.query_layer import TrainingDataQueryService
@@ -20,6 +21,7 @@ class TrainingOSLLMService:
         self.db = db
 
     def interpret(self, request: schemas.LLMInterpretRequest) -> schemas.LLMInterpretResponse:
+        ensure_compiled_profile_prompt(prompts_root=settings.BASE_DIR / "prompts", force=False)
         prompt_repo = PromptRepository(settings.BASE_DIR / "prompts")
         language = (request.language or settings.LLM_USER_LANGUAGE or settings.LLM_DEFAULT_LANGUAGE).strip().lower()
         default_language = (settings.LLM_DEFAULT_LANGUAGE or "en").strip().lower()
@@ -29,30 +31,14 @@ class TrainingOSLLMService:
             generic_candidates = [request.generic_prompt_key]
         else:
             base = settings.LLM_GENERIC_PROMPT_BASENAME
-            generic_candidates = [
-                f"{base}.{language}",
-                f"{base}.{default_language}",
-                base,
-            ]
+            generic_candidates = [base]
 
         private_candidates: list[str] = []
         if request.private_prompt_key:
-            private_candidates.extend(
-                [
-                    f"{request.private_prompt_key}.{language}",
-                    f"{request.private_prompt_key}.{default_language}",
-                    request.private_prompt_key,
-                ]
-            )
+            private_candidates.append(request.private_prompt_key)
         elif settings.LLM_PRIVATE_PROMPT_BASENAME:
             base = settings.LLM_PRIVATE_PROMPT_BASENAME
-            private_candidates.extend(
-                [
-                    f"{base}.{language}",
-                    f"{base}.{default_language}",
-                    base,
-                ]
-            )
+            private_candidates.append(base)
 
         template_base = settings.LLM_PRIVATE_TEMPLATE_BASENAME
         if template_base:

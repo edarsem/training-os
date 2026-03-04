@@ -22,13 +22,13 @@ class PromptRepository:
 
     def resolve(self, *, generic_key: str, private_key: str | None = None) -> PromptBundle:
         generic_path = self._resolve_generic_path(generic_key)
-        generic_text = generic_path.read_text(encoding="utf-8").strip()
+        generic_text = self._read_prompt_content(generic_path)
 
         private_path: Path | None = None
         private_text: str | None = None
         if private_key:
             private_path = self._resolve_private_path(private_key)
-            private_text = private_path.read_text(encoding="utf-8").strip()
+            private_text = self._read_prompt_content(private_path)
 
         return PromptBundle(
             generic_key=generic_key,
@@ -51,7 +51,7 @@ class PromptRepository:
                 f"Generic prompt not found. Tried: {', '.join(generic_candidates)}"
             )
 
-        generic_text = generic_path.read_text(encoding="utf-8").strip()
+        generic_text = self._read_prompt_content(generic_path)
 
         private_key: str | None = None
         private_path: Path | None = None
@@ -59,7 +59,7 @@ class PromptRepository:
         if private_candidates:
             private_key, private_path = self._resolve_first(self.private_dir, private_candidates)
             if private_path:
-                private_text = private_path.read_text(encoding="utf-8").strip()
+                private_text = self._read_prompt_content(private_path)
 
         return PromptBundle(
             generic_key=generic_key,
@@ -94,7 +94,7 @@ class PromptRepository:
     @staticmethod
     def _resolve_with_extensions(base_dir: Path, key: str) -> Path | None:
         direct = base_dir / key
-        if direct.exists() and direct.is_file():
+        if direct.exists() and (direct.is_file() or direct.is_dir()):
             return direct
 
         for suffix in (".txt", ".md"):
@@ -103,3 +103,28 @@ class PromptRepository:
                 return candidate
 
         return None
+
+    @staticmethod
+    def _read_prompt_content(path: Path) -> str:
+        if path.is_file():
+            return path.read_text(encoding="utf-8").strip()
+
+        if path.is_dir():
+            parts = sorted(
+                [
+                    child
+                    for child in path.rglob("*")
+                    if child.is_file() and child.suffix.lower() in {".txt", ".md"}
+                ],
+                key=lambda item: item.as_posix(),
+            )
+            if not parts:
+                return ""
+            chunks: list[str] = []
+            for part in parts:
+                text = part.read_text(encoding="utf-8").strip()
+                if text:
+                    chunks.append(text)
+            return "\n\n".join(chunks).strip()
+
+        return ""

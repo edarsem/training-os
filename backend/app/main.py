@@ -1,11 +1,14 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from app.api.api import router as api_router
+from app.core.config import settings
 from app.core.database import engine, Base, run_sqlite_schema_updates
+from app.llm.profile_prompt_compiler import ensure_compiled_profile_prompt
 
 # Create database tables
 Base.metadata.create_all(bind=engine)
 run_sqlite_schema_updates()
+ensure_compiled_profile_prompt(prompts_root=settings.BASE_DIR / "prompts", force=True)
 
 app = FastAPI(
     title="Training OS API",
