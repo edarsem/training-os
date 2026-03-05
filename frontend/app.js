@@ -221,9 +221,9 @@ document.addEventListener('alpine:init', () => {
         updateWeekInfo() {
             this.currentYear = getIsoWeekYear(this.currentDate);
             this.currentWeek = getIsoWeek(this.currentDate);
-            this.weekJumpDate = toIsoDate(this.currentDate);
-            
             const start = getStartOfIsoWeek(this.currentDate);
+            this.weekJumpDate = toIsoDate(start);
+            
             const end = addDays(start, 6);
             this.weekLabel = `${formatMonthDay(start)} - ${formatMonthDayYear(end)}`;
 
