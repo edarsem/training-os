@@ -93,7 +93,7 @@
                     <p class="text-gray-700 whitespace-pre-wrap" x-text="plan.description || 'Click to add your weekly plan.'"></p>
                 </div>
 
-                <form x-show="editPlan" x-cloak class="space-y-3 flex-1 flex flex-col">
+                <form x-show="editPlan" @keydown.meta.enter.prevent="savePlan()" @keydown.ctrl.enter.prevent="savePlan()" x-cloak class="space-y-3 flex-1 flex flex-col">
                     <div>
                         <textarea x-model="planForm.description" rows="4" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm border p-2 h-28"></textarea>
                     </div>
