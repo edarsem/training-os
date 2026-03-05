@@ -70,8 +70,18 @@ class TrainingOSLLMService:
 
         system_prompt = "\n\n".join(part.strip() for part in system_prompt_parts if part and part.strip())
 
-        provider_name = request.provider or settings.LLM_PROVIDER
-        model_name = request.model or settings.MISTRAL_MODEL
+        provider_name = (request.provider or settings.LLM_PROVIDER or "mistral").strip().lower()
+        requested_model = (request.model or "").strip()
+        if not request.provider and requested_model.lower().startswith("gemini"):
+            provider_name = "google"
+
+        if requested_model:
+            model_name = requested_model
+        elif provider_name == "google":
+            model_name = settings.GOOGLE_MODEL
+        else:
+            model_name = settings.MISTRAL_MODEL
+
         temperature = 0.0 if request.deterministic else settings.LLM_TEMPERATURE
 
         provider = build_provider(
@@ -79,6 +89,8 @@ class TrainingOSLLMService:
             api_key=settings.MISTRAL_API_KEY,
             base_url=settings.MISTRAL_API_BASE_URL,
             timeout_seconds=settings.LLM_TIMEOUT_SECONDS,
+            google_api_key=settings.GOOGLE_API_KEY,
+            google_base_url=settings.GOOGLE_API_BASE_URL,
         )
 
         mcp_enabled = bool(settings.LLM_MCP_ENABLED) and provider_name.lower() != "echo"

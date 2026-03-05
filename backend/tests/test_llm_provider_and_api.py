@@ -5,7 +5,7 @@ import unittest
 from fastapi import HTTPException
 
 from app.api import api
-from app.llm.providers import EchoProvider, LLMConfigurationError, build_provider
+from app.llm.providers import EchoProvider, GoogleProvider, LLMConfigurationError, build_provider
 from app.schemas import schemas
 
 
@@ -26,6 +26,26 @@ class TestLLMProvidersAndAPI(unittest.TestCase):
                 base_url="https://example.com",
                 timeout_seconds=10,
             )
+
+        with self.assertRaises(LLMConfigurationError):
+            build_provider(
+                provider_name="google",
+                api_key="ignored",
+                base_url="https://example.com",
+                timeout_seconds=10,
+                google_api_key=None,
+            )
+
+    def test_build_google_provider(self):
+        provider = build_provider(
+            provider_name="google",
+            api_key="ignored",
+            base_url="https://example.com",
+            timeout_seconds=10,
+            google_api_key="google-key",
+            google_base_url="https://generativelanguage.googleapis.com/v1beta",
+        )
+        self.assertIsInstance(provider, GoogleProvider)
 
     def test_echo_provider_round_trip(self):
         provider = EchoProvider()

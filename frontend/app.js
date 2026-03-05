@@ -138,7 +138,9 @@ document.addEventListener('alpine:init', () => {
         chatModelOptions: [
             'mistral-small-latest',
             'mistral-medium-latest',
-            'mistral-large-latest'
+            'mistral-large-latest',
+            'gemini-3.1-flash-lite-preview',
+            'gemini-3.1-pro'
         ],
         selectedChatModel: 'mistral-small-latest',
         markdownConfigured: false,
@@ -907,6 +909,7 @@ document.addEventListener('alpine:init', () => {
 
                     const payload = {
                         query: composedText,
+                        provider: effectiveModel.toLowerCase().startsWith('gemini') ? 'google' : 'mistral',
                         model: effectiveModel,
                         deterministic: true,
                         include_context_in_response: true,
