@@ -120,6 +120,18 @@ def get_daily_training_load_by_date_range(
         .all()
     )
 
+
+def get_latest_daily_training_load_on_or_before(
+    db: DBSession,
+    target_date: date,
+) -> Optional[models.DailyTrainingLoad]:
+    return (
+        db.query(models.DailyTrainingLoad)
+        .filter(models.DailyTrainingLoad.date <= target_date)
+        .order_by(models.DailyTrainingLoad.date.desc())
+        .first()
+    )
+
 def create_session(db: DBSession, session: schemas.SessionCreate) -> models.Session:
     db_session = models.Session(**session.model_dump())
     db.add(db_session)

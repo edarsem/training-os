@@ -1,5 +1,5 @@
 from pathlib import Path
-from pydantic import Field
+from pydantic import AliasChoices, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 class Settings(BaseSettings):
@@ -21,9 +21,13 @@ class Settings(BaseSettings):
 
     LLM_PROVIDER: str = "mistral"
     MISTRAL_API_KEY: str | None = None
-    GOOGLE_API_KEY: str | None = Field(default=None, alias="google_api_key")
+    GOOGLE_API_KEY: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("GOOGLE_API_KEY", "google_api_key"),
+    )
     GOOGLE_API_BASE_URL: str = "https://generativelanguage.googleapis.com/v1beta"
     GOOGLE_MODEL: str = "gemini-3.1-flash-lite-preview"
+    GOOGLE_FALLBACK_MODEL: str | None = None
     MISTRAL_API_BASE_URL: str = "https://api.mistral.ai/v1"
     MISTRAL_MODEL: str = "mistral-small-latest"
     LLM_TIMEOUT_SECONDS: int = 120

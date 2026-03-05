@@ -93,29 +93,32 @@ class TrainingOSLLMService:
             google_base_url=settings.GOOGLE_API_BASE_URL,
         )
 
-        mcp_enabled = bool(settings.LLM_MCP_ENABLED) and provider_name.lower() != "echo"
-        if mcp_enabled:
-            return self._interpret_with_mcp(
+        def _run_interpretation(model_to_use: str) -> schemas.LLMInterpretResponse:
+            mcp_enabled_inner = bool(settings.LLM_MCP_ENABLED) and provider_name.lower() != "echo"
+            if mcp_enabled_inner:
+                return self._interpret_with_mcp(
+                    request=request,
+                    provider=provider,
+                    provider_name=provider_name,
+                    model_name=model_to_use,
+                    temperature=temperature,
+                    language=language,
+                    system_prompt=system_prompt,
+                    prompt_bundle=prompt_bundle,
+                )
+
+            return self._interpret_legacy(
                 request=request,
                 provider=provider,
                 provider_name=provider_name,
-                model_name=model_name,
+                model_name=model_to_use,
                 temperature=temperature,
                 language=language,
                 system_prompt=system_prompt,
                 prompt_bundle=prompt_bundle,
             )
 
-        return self._interpret_legacy(
-            request=request,
-            provider=provider,
-            provider_name=provider_name,
-            model_name=model_name,
-            temperature=temperature,
-            language=language,
-            system_prompt=system_prompt,
-            prompt_bundle=prompt_bundle,
-        )
+        return _run_interpretation(model_name)
 
     def _interpret_legacy(
         self,

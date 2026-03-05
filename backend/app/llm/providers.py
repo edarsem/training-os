@@ -216,6 +216,8 @@ class GoogleProvider:
         except urllib_error.HTTPError as exc:
             body = exc.read().decode("utf-8", errors="ignore") if hasattr(exc, "read") else ""
             raise LLMProviderError(f"Google request failed with status {exc.code}: {body}") from exc
+        except TimeoutError as exc:
+            raise LLMProviderError("Google request timed out") from exc
         except urllib_error.URLError as exc:
             raise LLMProviderError(f"Google request failed: {exc.reason}") from exc
         except json.JSONDecodeError as exc:

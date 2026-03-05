@@ -140,7 +140,8 @@ document.addEventListener('alpine:init', () => {
             'mistral-medium-latest',
             'mistral-large-latest',
             'gemini-3.1-flash-lite-preview',
-            'gemini-3.1-pro'
+            'gemini-3.1-pro-preview',
+            'gemini-3.1-pro-preview-customtools',
         ],
         selectedChatModel: 'mistral-small-latest',
         markdownConfigured: false,
@@ -190,6 +191,11 @@ document.addEventListener('alpine:init', () => {
                 this.selectedChatModel = this.chatModelOptions[0];
                 localStorage.setItem('training_os_chat_model', this.selectedChatModel);
             }
+        },
+
+        getProviderForModel(modelName) {
+            const normalized = String(modelName || '').trim().toLowerCase();
+            return normalized.startsWith('gemini') ? 'google' : 'mistral';
         },
 
         setChatModel(modelName) {
@@ -901,20 +907,20 @@ document.addEventListener('alpine:init', () => {
                     await this.persistChatMessage('user', composedText);
                 }
 
-                    const selectedModel = String(this.selectedChatModel || '').trim();
-                    const effectiveModel = this.chatModelOptions.includes(selectedModel)
-                        ? selectedModel
-                        : this.chatModelOptions[0];
-                    this.setChatModel(effectiveModel);
+                const selectedModel = String(this.selectedChatModel || '').trim();
+                const effectiveModel = this.chatModelOptions.includes(selectedModel)
+                    ? selectedModel
+                    : this.chatModelOptions[0];
+                this.setChatModel(effectiveModel);
 
-                    const payload = {
-                        query: composedText,
-                        provider: effectiveModel.toLowerCase().startsWith('gemini') ? 'google' : 'mistral',
-                        model: effectiveModel,
-                        deterministic: true,
-                        include_context_in_response: true,
-                        include_input_preview: true
-                    };
+                const payload = {
+                    query: composedText,
+                    provider: this.getProviderForModel(effectiveModel),
+                    model: effectiveModel,
+                    deterministic: true,
+                    include_context_in_response: true,
+                    include_input_preview: true
+                };
 
                 this.chatDebug.lastQuery = composedText;
                 this.chatDebug.lastPayload = payload;

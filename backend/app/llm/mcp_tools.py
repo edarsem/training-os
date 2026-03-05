@@ -58,6 +58,16 @@ def _month_day_label(value: date) -> str:
     return f"{value.strftime('%B')} {_ordinal_day(value)}"
 
 
+def _natural_date_label(value: date, *, now_date: date | None = None) -> str:
+    base = f"{_day_label(value)}, {value.strftime('%B')} {value.day}"
+    if now_date is not None:
+        if value == now_date:
+            return f"{base} (today)"
+        if value == (now_date - timedelta(days=1)):
+            return f"{base} (yesterday)"
+    return base
+
+
 def _parse_now_date(now_iso_date: str | None) -> date:
     if now_iso_date:
         try:
@@ -100,6 +110,36 @@ def _fmt_metric(value: Any, digits: int = 0) -> str:
     return f"{numeric:.{max(0, int(digits))}f}"
 
 
+def _fmt_percent_no_decimal(value: Any) -> str:
+    numeric = _to_float_or_none(value)
+    if numeric is None:
+        return "n/a"
+    return f"{int(round(numeric))}%"
+
+
+def _acwr_ratio_to_percent(acwr_ratio: Any) -> int | None:
+    numeric = _to_float_or_none(acwr_ratio)
+    if numeric is None:
+        return None
+    return int(round(numeric * 100.0))
+
+
+def _session_chronological_key(session: Any) -> tuple[str, str, int]:
+    start_time = getattr(session, "start_time", None)
+    if start_time is not None:
+        try:
+            start_time_key = start_time.isoformat()
+        except Exception:
+            start_time_key = ""
+    else:
+        start_time_key = ""
+    return (
+        str(getattr(session, "date", "")),
+        start_time_key,
+        int(getattr(session, "id", 0) or 0),
+    )
+
+
 def _fmt_distance_km(value: Any, *, session_type: str | None = None) -> str:
     numeric = _to_float_or_none(value)
     if numeric is None:
@@ -126,36 +166,35 @@ def _filter_salient_sessions(sessions: list[Any], include_sessions: Any) -> tupl
 
     if mode == "all":
         selected = list(sessions)
-        selected.sort(key=lambda s: (_to_float_or_none(getattr(s, "training_load", None)) or 0.0, getattr(s, "id", 0)), reverse=True)
+        selected.sort(key=_session_chronological_key)
         return selected, {"mode": "all", "threshold": None, "returned": len(selected)}
 
     selected = [s for s in sessions if (_to_float_or_none(getattr(s, "training_load", None)) or 0.0) >= float(threshold or 0.0)]
-    selected.sort(key=lambda s: (_to_float_or_none(getattr(s, "training_load", None)) or 0.0, getattr(s, "id", 0)), reverse=True)
+    selected.sort(key=_session_chronological_key)
     return selected, {"mode": "threshold", "threshold": float(threshold or 0.0), "returned": len(selected)}
 
 
 def _compute_shape_snapshot(db: DBSession, *, on_date: date) -> dict[str, Any]:
-    points = crud.get_daily_training_load_by_date_range(db, on_date, on_date)
-    if not points:
+    point = crud.get_latest_daily_training_load_on_or_before(db, on_date)
+    if not point:
         return {"date": on_date.isoformat(), "shape_ctl": None, "acwr": None}
 
-    point = points[-1]
     shape_ctl = _to_float_or_none(getattr(point, "ctl", None))
-    acwr = _to_float_or_none(getattr(point, "acwr", None))
+    acwr = _acwr_ratio_to_percent(getattr(point, "acwr", None))
     return {
-        "date": on_date.isoformat(),
+        "date": point.date.isoformat() if getattr(point, "date", None) else on_date.isoformat(),
         "shape_ctl": round(shape_ctl, 0) if shape_ctl is not None else None,
-        "acwr": round(acwr, 0) if acwr is not None else None,
+        "acwr": acwr,
     }
 
 
 def _compute_avg_acwr(db: DBSession, *, start_date: date, end_date: date) -> float | None:
     points = crud.get_daily_training_load_by_date_range(db, start_date, end_date)
-    acwrs = [_to_float_or_none(getattr(point, "acwr", None)) for point in points]
+    acwrs = [_acwr_ratio_to_percent(getattr(point, "acwr", None)) for point in points]
     values = [value for value in acwrs if value is not None]
     if not values:
         return None
-    return round(sum(values) / len(values), 0)
+    return float(int(round(sum(values) / len(values))))
 
 
 def _render_week_summary_text(payload: dict[str, Any]) -> str:
@@ -218,7 +257,7 @@ def _render_day_details_text(payload: dict[str, Any]) -> str:
     lines = [
         f"{payload.get('date')} day details:",
         (
-            f"Shape (CTL): {_fmt_metric(day_shape.get('shape_ctl'))}, Stress ratio (ACWR): {_fmt_metric(day_shape.get('acwr'), 0)} "
+            f"Shape (CTL): {_fmt_metric(day_shape.get('shape_ctl'))}, Stress ratio (ACWR): {_fmt_percent_no_decimal(day_shape.get('acwr'))} "
         ),
         (
             f"{totals.get('total_sessions', 0)} sessions, "
@@ -294,7 +333,7 @@ def _render_block_summary_text(payload: dict[str, Any]) -> str:
             f"Shape (CTL) start→end: {_fmt_metric(shape.get('shape_ctl_start'))} → {_fmt_metric(shape.get('shape_ctl_end'))} "
             f"(Δ {_fmt_metric(shape.get('shape_change_ctl'))})."
         ),
-        f"Average Stress ratio (ACWR) across block: {_fmt_metric(shape.get('avg_acwr'), 0)}",
+        f"Average Stress ratio (ACWR) across block: {_fmt_percent_no_decimal(shape.get('avg_acwr'))}",
     ]
 
     current_week_day = payload.get("current_week_day")
@@ -393,7 +432,7 @@ def _render_salient_sessions_text(payload: dict[str, Any]) -> str:
     shape = payload.get("shape_summary", {})
     lines.append(
         f"Shape (CTL) start→end: {_fmt_metric(shape.get('shape_ctl_start'))} → {_fmt_metric(shape.get('shape_ctl_end'))} | "
-        f"Average Stress ratio (ACWR): {_fmt_metric(shape.get('avg_acwr'), 0)}"
+        f"Average Stress ratio (ACWR): {_fmt_percent_no_decimal(shape.get('avg_acwr'))}"
     )
 
     for item in payload.get("sessions") or []:
@@ -1053,6 +1092,173 @@ def get_all_races_tool(
     return {"text": _render_all_races_text(payload)}
 
 
+def get_recent_context_tool(
+    db: DBSession,
+    *,
+    now_iso_date: str | None = None,
+    output_mode: str = "text",
+) -> dict[str, Any]:
+    now_date = _parse_now_date(now_iso_date)
+    week_year, week_number = _iso_anchor_from_date(now_date)
+    week_start, week_end = _week_window(week_year, week_number)
+    week_plan = crud.get_weekly_plan(db, week_year, week_number)
+
+    today_shape = _compute_shape_snapshot(db, on_date=now_date)
+
+    range_7_start = now_date - timedelta(days=6)
+    range_7_end = now_date
+    recent_points = crud.get_daily_training_load_by_date_range(db, range_7_start, range_7_end)
+    total_charge_last_7_days = round(sum((_to_float_or_none(getattr(point, "load", None)) or 0.0) for point in recent_points), 0)
+
+    focus_start = now_date - timedelta(days=6)
+    focus_end = now_date - timedelta(days=2)
+    focus_sessions_all = crud.get_sessions_by_date_range(db, focus_start, focus_end) if focus_start <= focus_end else []
+    focus_sessions: list[Any] = []
+    for session in focus_sessions_all:
+        is_strength = str(getattr(session, "type", "")).strip().lower() == "strength"
+        tl_value = _to_float_or_none(getattr(session, "training_load", None)) or 0.0
+        if is_strength or tl_value > 150.0:
+            focus_sessions.append(session)
+    focus_sessions.sort(key=_session_chronological_key)
+
+    recent_workouts_start = now_date - timedelta(days=1)
+    recent_workouts = crud.get_sessions_by_date_range(db, recent_workouts_start, now_date)
+    recent_workouts.sort(key=_session_chronological_key)
+
+    note_start = focus_start
+    note_end = now_date
+    notes = crud.get_day_notes_by_date_range(db, note_start, note_end) if note_start <= note_end else []
+    day_notes_map = {item.date.isoformat(): item.note for item in notes}
+
+    payload = {
+        "current_week_plan": {
+            "year": week_year,
+            "week_number": week_number,
+            "date_start": week_start.isoformat(),
+            "date_end": week_end.isoformat(),
+            "description": (week_plan.description if week_plan else None),
+            "target_distance_km": (week_plan.target_distance_km if week_plan else None),
+            "target_sessions": (week_plan.target_sessions if week_plan else None),
+            "tags": (week_plan.tags if week_plan else None),
+        },
+        "today": {
+            "date": now_date.isoformat(),
+            "shape_ctl": today_shape.get("shape_ctl"),
+            "acwr": today_shape.get("acwr"),
+            "total_charge_last_7_days": total_charge_last_7_days,
+            "charge_window": {
+                "start": range_7_start.isoformat(),
+                "end": range_7_end.isoformat(),
+            },
+        },
+        "focus_workouts": {
+            "window_start": focus_start.isoformat(),
+            "window_end": focus_end.isoformat(),
+            "items": [
+                {
+                    "id": session.id,
+                    "date": session.date.isoformat(),
+                    "type": session.type,
+                    "training_load": round(_to_float_or_none(session.training_load) or 0.0, 0),
+                    "moving_duration_minutes": session.moving_duration_minutes,
+                    "duration_minutes": session.duration_minutes,
+                    "distance_km": session.distance_km,
+                    "elevation_gain_m": session.elevation_gain_m,
+                    "notes": _truncate_text(session.notes, max_chars=140),
+                    "day_note": _truncate_text(day_notes_map.get(session.date.isoformat()), max_chars=160),
+                }
+                for session in focus_sessions
+            ],
+        },
+        "latest_workouts": {
+            "window_start": recent_workouts_start.isoformat(),
+            "window_end": now_date.isoformat(),
+            "items": [
+                {
+                    "id": session.id,
+                    "date": session.date.isoformat(),
+                    "type": session.type,
+                    "training_load": round(_to_float_or_none(session.training_load) or 0.0, 0),
+                    "moving_duration_minutes": session.moving_duration_minutes,
+                    "duration_minutes": session.duration_minutes,
+                    "distance_km": session.distance_km,
+                    "elevation_gain_m": session.elevation_gain_m,
+                    "notes": _truncate_text(session.notes, max_chars=140),
+                }
+                for session in recent_workouts
+            ],
+        },
+    }
+
+    if output_mode == "json":
+        return payload
+
+    lines: list[str] = []
+    lines.append("Current week plan:")
+    plan_desc = payload["current_week_plan"].get("description")
+    lines.append(f"- {plan_desc if plan_desc else 'None'}")
+
+    today = payload["today"]
+    lines.append(
+        "Today summary: "
+        f"Shape (CTL) {_fmt_metric(today.get('shape_ctl'), 0)}, "
+        f"Trend (ACWR) {_fmt_percent_no_decimal(today.get('acwr'))}, "
+        f"total charge last 7 days {_fmt_metric(today.get('total_charge_last_7_days'), 0)}"
+    )
+
+    lines.append("Strength workouts and >150 TL workouts (today-6 to today-2), chronological:")
+    focus_items = payload["focus_workouts"].get("items") or []
+    if not focus_items:
+        lines.append("- none")
+    else:
+        for item in focus_items:
+            item_date_label = str(item.get("date") or "")
+            try:
+                item_date_label = _natural_date_label(date.fromisoformat(str(item.get("date"))), now_date=now_date)
+            except ValueError:
+                pass
+            line = (
+                f"- {item_date_label}: {item.get('type')} TL {_fmt_metric(item.get('training_load'), 0)} "
+                f"({_format_duration_hours(int(item.get('moving_duration_minutes') or item.get('duration_minutes') or 0))})"
+            )
+            lines.append(line)
+            if item.get("day_note"):
+                lines.append(f"  day note: {item.get('day_note')}")
+            if item.get("notes"):
+                lines.append(f"  note: {item.get('notes')}")
+
+    lines.append("All workouts from today-1 and today:")
+    latest_items = payload["latest_workouts"].get("items") or []
+    has_today_workout = False
+    if not latest_items:
+        lines.append(f"- {_natural_date_label(now_date, now_date=now_date)}: nothing yet")
+    else:
+        for item in latest_items:
+            item_date_label = str(item.get("date") or "")
+            item_date_obj: date | None = None
+            try:
+                item_date_obj = date.fromisoformat(str(item.get("date")))
+                item_date_label = _natural_date_label(item_date_obj, now_date=now_date)
+            except ValueError:
+                item_date_obj = None
+
+            if item_date_obj == now_date:
+                has_today_workout = True
+
+            line = (
+                f"- {item_date_label}: {item.get('type')} TL {_fmt_metric(item.get('training_load'), 0)} "
+                f"({_format_duration_hours(int(item.get('moving_duration_minutes') or item.get('duration_minutes') or 0))})"
+            )
+            lines.append(line)
+            if item.get("notes"):
+                lines.append(f"  note: {item.get('notes')}")
+
+        if not has_today_workout:
+            lines.append(f"- {_natural_date_label(now_date, now_date=now_date)}: nothing yet")
+
+    return {"text": "\n".join(lines)}
+
+
 def get_mcp_tools_schema() -> list[dict[str, Any]]:
     return [
         {
@@ -1172,7 +1378,20 @@ def get_mcp_tools_schema() -> list[dict[str, Any]]:
             "type": "function",
             "function": {
                 "name": "get_all_races",
-                "description": "Get all sessions marked as race, oldest to newest, including date, session id, distance, elevation, moving/elapsed time, training load, note, and day note.",
+                "description": "Get all sessions marked as race.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {},
+                    "required": [],
+                    "additionalProperties": False,
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "get_recent_context",
+                "description": "Get recent context: week plan, shape, sessions of the last few days to estimate current fatigue or freshness.",
                 "parameters": {
                     "type": "object",
                     "properties": {},
@@ -1337,6 +1556,14 @@ def execute_mcp_tool(
     if name == "get_all_races":
         return get_all_races_tool(
             db,
+            output_mode="text",
+        )
+
+    if name == "get_recent_context":
+        now_iso_date = arguments.get("now_iso_date")
+        return get_recent_context_tool(
+            db,
+            now_iso_date=str(now_iso_date) if now_iso_date else None,
             output_mode="text",
         )
 
