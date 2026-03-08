@@ -15,12 +15,20 @@ It is designed for practical weekly use, with load analytics and an MCP-powered 
 
 - Weekly calendar workflow for sessions and day notes
 - Weekly plan as a separate intent layer
-- - MCP tools for agentic coaching queries
+- MCP tools for agentic coaching queries
 - Analysis views (`analysis.html`, `training-load.html`, `chat-history.html`)
 - Strava sync + FIT import
 - Training load pipeline (TL / ATL / CTL / ACWR)
 
 ## Quick start
+
+### One command
+
+```bash
+./scripts/dev_up.sh
+```
+
+### Manual steps
 
 ```bash
 # backend

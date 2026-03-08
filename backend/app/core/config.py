@@ -18,6 +18,9 @@ class Settings(BaseSettings):
     STRAVA_CLIENT_SECRET: str | None = None
     STRAVA_API_BASE_URL: str = "https://www.strava.com/api/v3"
     STRAVA_OAUTH_URL: str = "https://www.strava.com/oauth/token"
+    STRAVA_AUTO_REFRESH_ON_STARTUP: bool = True
+    STRAVA_AUTO_REFRESH_PER_PAGE: int = 30
+    STRAVA_AUTO_REFRESH_MAX_PAGES: int = 20
 
     LLM_PROVIDER: str = "mistral"
     MISTRAL_API_KEY: str | None = None
