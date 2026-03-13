@@ -1,7 +1,7 @@
 from enum import Enum
 from pydantic import BaseModel, Field
 from datetime import date, datetime
-from typing import Any, Optional, List
+from typing import Any, Optional, List, Literal
 
 # --- Session Schemas ---
 class SessionBase(BaseModel):
@@ -230,6 +230,12 @@ class LLMContextLevel(str, Enum):
     block = "block"
 
 
+class LLMConversationMessage(BaseModel):
+    role: Literal["user", "assistant"]
+    content: str = Field(..., min_length=1)
+    tool_trace: Optional[List[dict[str, Any]]] = None
+
+
 class LLMInterpretRequest(BaseModel):
     query: str = Field(..., min_length=1)
     levels: List[LLMContextLevel] = Field(default_factory=lambda: [LLMContextLevel.week])
@@ -254,6 +260,8 @@ class LLMInterpretRequest(BaseModel):
     deterministic: bool = True
     include_context_in_response: bool = True
     include_input_preview: bool = False
+    conversation_history: List[LLMConversationMessage] = Field(default_factory=list)
+    include_tool_trace_in_history: bool = True
 
     tool_hints: List[str] = Field(default_factory=list)
 

@@ -132,6 +132,7 @@ document.addEventListener('alpine:init', () => {
         noteForm: { date: '', note: '' },
 
         chatMessages: [],
+        includeToolTraceInCoachHistory: true,
         activeConversationId: null,
         chatInput: '',
         saveChatHistory: false,
@@ -919,7 +920,21 @@ document.addEventListener('alpine:init', () => {
                     model: effectiveModel,
                     deterministic: true,
                     include_context_in_response: true,
-                    include_input_preview: true
+                    include_input_preview: true,
+                    include_tool_trace_in_history: !!this.includeToolTraceInCoachHistory,
+                    conversation_history: this.chatMessages
+                        .slice(0, -1)
+                        .filter((message) => message && (message.role === 'user' || message.role === 'assistant') && String(message.content || '').trim())
+                        .map((message) => ({
+                            role: message.role,
+                            content: String(message.content || '').trim(),
+                            tool_trace: (
+                                this.includeToolTraceInCoachHistory &&
+                                message.role === 'assistant' &&
+                                Array.isArray(message.mcp_trace) &&
+                                message.mcp_trace.length > 0
+                            ) ? message.mcp_trace : null
+                        }))
                 };
 
                 this.chatDebug.lastQuery = composedText;
@@ -939,7 +954,8 @@ document.addEventListener('alpine:init', () => {
 
                 this.chatMessages.push({
                     role: 'assistant',
-                    content: data?.answer || 'No response.'
+                    content: data?.answer || 'No response.',
+                    mcp_trace: data?.mcp_trace || data?.context?.mcp_trace || null
                 });
                 if (this.saveChatHistory) {
                     await this.persistChatMessage('assistant', data?.answer || 'No response.');

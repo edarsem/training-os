@@ -19,6 +19,36 @@ class TrainingOSLLMService:
     def __init__(self, db: DBSession):
         self.db = db
 
+    @staticmethod
+    def _build_conversation_history_messages(request: schemas.LLMInterpretRequest) -> list[dict[str, str]]:
+        include_tool_trace = bool(request.include_tool_trace_in_history)
+        history_messages: list[dict[str, str]] = []
+
+        for item in request.conversation_history or []:
+            role = str(item.role or "").strip().lower()
+            if role not in {"user", "assistant"}:
+                continue
+
+            content = str(item.content or "").strip()
+            if not content:
+                continue
+
+            if include_tool_trace and item.tool_trace:
+                try:
+                    trace_dump = json.dumps(item.tool_trace, ensure_ascii=False)
+                except Exception:
+                    trace_dump = "[]"
+                content = f"{content}\n\n[Tool trace]\n{trace_dump}"
+
+            history_messages.append(
+                {
+                    "role": role,
+                    "content": content,
+                }
+            )
+
+        return history_messages
+
     def interpret(self, request: schemas.LLMInterpretRequest) -> schemas.LLMInterpretResponse:
         ensure_compiled_profile_prompt(prompts_root=settings.BASE_DIR / "prompts", force=False)
         prompt_repo = PromptRepository(settings.BASE_DIR / "prompts")
@@ -93,6 +123,8 @@ class TrainingOSLLMService:
             google_base_url=settings.GOOGLE_API_BASE_URL,
         )
 
+        conversation_history_messages = self._build_conversation_history_messages(request)
+
         def _run_interpretation(model_to_use: str) -> schemas.LLMInterpretResponse:
             mcp_enabled_inner = bool(settings.LLM_MCP_ENABLED) and provider_name.lower() != "echo"
             if mcp_enabled_inner:
@@ -105,6 +137,7 @@ class TrainingOSLLMService:
                     language=language,
                     system_prompt=system_prompt,
                     prompt_bundle=prompt_bundle,
+                    conversation_history_messages=conversation_history_messages,
                 )
 
             return self._interpret_legacy(
@@ -116,6 +149,7 @@ class TrainingOSLLMService:
                 language=language,
                 system_prompt=system_prompt,
                 prompt_bundle=prompt_bundle,
+                conversation_history_messages=conversation_history_messages,
             )
 
         return _run_interpretation(model_name)
@@ -131,6 +165,7 @@ class TrainingOSLLMService:
         language: str,
         system_prompt: str,
         prompt_bundle: Any,
+        conversation_history_messages: list[dict[str, str]],
     ) -> schemas.LLMInterpretResponse:
         context_builder = TrainingDataQueryService(self.db)
         context = context_builder.build_context(request)
@@ -148,6 +183,7 @@ class TrainingOSLLMService:
 
         messages = [
             {"role": "system", "content": system_prompt},
+            *conversation_history_messages,
             {"role": "user", "content": user_message_content},
         ]
 
@@ -200,6 +236,7 @@ class TrainingOSLLMService:
         language: str,
         system_prompt: str,
         prompt_bundle: Any,
+        conversation_history_messages: list[dict[str, str]],
     ) -> schemas.LLMInterpretResponse:
         now_iso = datetime.now(timezone.utc).date().isoformat()
         user_payload = {
@@ -230,6 +267,7 @@ class TrainingOSLLMService:
                     "Prefer minimal tool calls and minimal data volume."
                 ),
             },
+            *conversation_history_messages,
             {"role": "user", "content": user_message_content},
         ]
 
