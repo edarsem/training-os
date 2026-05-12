@@ -90,9 +90,12 @@ document.addEventListener('alpine:init', () => {
 
         async fetchWeekLoadState() {
             const start = getStartOfIsoWeek(this.currentDate);
-            const end = addDays(start, 6);
+            // If we're viewing the current ISO week, only fetch up to today
+            const today = new Date();
+            const isCurrentWeek = this.currentYear === getIsoWeekYear(today) && this.currentWeek === getIsoWeek(today);
+            const endDate = isCurrentWeek ? today : addDays(start, 6);
             const startIso = toIsoDate(start);
-            const endIso = toIsoDate(end);
+            const endIso = toIsoDate(endDate);
 
             try {
                 const res = await fetch(`${API_BASE}/training-load?start_date=${startIso}&end_date=${endIso}`);
@@ -431,7 +434,7 @@ document.addEventListener('alpine:init', () => {
                 swim: '🏊',
                 hike: '🥾',
                 bike: '🚴',
-                skate: '⛸️',
+                skate: '🏒',
                 strength: '💪',
                 mobility: '🧘',
                 other: '✨'
@@ -455,7 +458,12 @@ document.addEventListener('alpine:init', () => {
         },
 
         computeWeekStats() {
-            const sessions = this.summary.sessions || [];
+            const allSessions = this.summary.sessions || [];
+            // For the current week, only include sessions up to today
+            const today = new Date();
+            const isCurrentWeek = this.currentYear === getIsoWeekYear(today) && this.currentWeek === getIsoWeek(today);
+            const cutoffIso = isCurrentWeek ? toIsoDate(today) : null;
+            const sessions = isCurrentWeek ? allSessions.filter((s) => s.date <= cutoffIso) : allSessions;
             const runTrailKm = sessions
                 .filter((session) => ['run', 'trail'].includes(session.type))
                 .reduce((sum, session) => sum + (session.distance_km || 0), 0);
@@ -490,6 +498,7 @@ document.addEventListener('alpine:init', () => {
                 strengthTime: this.formatDuration(strengthMinutes),
                 totalTime: this.formatDuration(totalMinutes),
                 weekLoad: Math.round(weekLoad),
+                // weekShape is populated by fetchWeekLoadState (already fetched up to today for current week)
                 weekShape: this.weekStats.weekShape || 0,
             };
         },

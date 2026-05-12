@@ -30,6 +30,18 @@ def _map_strava_sport_type_to_session_type(sport_type: str | None) -> str:
     if not sport_type:
         return "other"
     normalized = sport_type.strip().lower()
+    normalized_simple = (
+        normalized.replace("_", " ")
+        .replace("-", " ")
+        .replace(".", " ")
+    )
+    normalized_simple = " ".join(normalized_simple.split())
+
+    if "cardio" in normalized_simple:
+        if any(token in normalized_simple for token in {"int", "indoor", "interieur"}):
+            return "mobility"
+        if any(token in normalized_simple for token in {"ext", "outdoor", "exterieur"}):
+            return "other"
 
     mapping = {
         "run": "run",
@@ -47,10 +59,19 @@ def _map_strava_sport_type_to_session_type(sport_type: str | None) -> str:
         "workout": "strength",
         "yoga": "mobility",
         "pilates": "mobility",
+        "cardio int": "mobility",
+        "cardio intérieur": "mobility",
+        "cardio interieur": "mobility",
+        "cardio indoor": "mobility",
+        "cardio ext": "other",
+        "cardio extérieur": "other",
+        "cardio exterieur": "other",
+        "cardio outdoor": "other",
+        "cartio ext": "other",
         "iceskate": "skate",
         "inlineskate": "skate",
     }
-    return mapping.get(normalized, "other")
+    return mapping.get(normalized_simple, mapping.get(normalized, "other"))
 
 
 def _parse_strava_start_date(start_date_raw: str | None) -> datetime | None:
