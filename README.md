@@ -1,17 +1,33 @@
 # Training OS
 
-Logo asset: [logo.png](logo.png)
+Training OS is a personal training coach and analytics playground — a weekly-first training calendar that combines structured sessions (FIT/Strava) with a lightweight planning layer and an LLM-powered coach interface.
 
-Training OS is a personalized sports coach and training tracker.
+![Calendar overview](frontend/screenshots/calendar.png)
 
-It combines text-based plan and notes along with structured session data from .fit files and Strava sync. This data is analysed to provide insights into training load and performance. The core concept is a **weekly training calendar** with two main layers:
+## Highlights
 
-- **Actuals**: sessions + day notes (what happened)
-- **Plan**: weekly intent (what should happen)
+- Week-centric UX: separate *Actuals* (sessions & notes) and *Plan* (weekly intent)
+- Training Load pipeline: TL (per-hour based), ATL (7d), CTL (42d) and ACWR
+- Live coaching tools: MCP-based LLM tools that can query your session history
+- Polished visual reports: merged CTL+ACWR view, per-week CTL shown as-of-today
 
-It is designed for practical weekly use, with load analytics and an MCP-powered coaching backend.
+## Screenshots
 
-## What it currently includes
+- **Calendar** (weekly sessions, plan & actuals, inline edit):
+
+  ![Calendar overview](frontend/screenshots/calendar.png)
+
+- **Coach** (LLM-powered coaching chat):
+
+  ![Coach overview](frontend/screenshots/coach.png)
+
+- **Trends** (CTL + ACWR, period-based analytics):
+
+  ![Trends overview](frontend/screenshots/trends.png)
+
+- **Training Load** (weekly load, daily breakdown, week stats):
+
+  ![Weekly training load](frontend/screenshots/training_load.png)
 
 - Weekly calendar workflow for sessions and day notes
 - Weekly plan as a separate intent layer
@@ -22,13 +38,13 @@ It is designed for practical weekly use, with load analytics and an MCP-powered 
 
 ## Quick start
 
-### One command
+### One command (dev)
 
 ```bash
 ./scripts/dev_up.sh
 ```
 
-### Manual steps
+### Manual (backend + frontend)
 
 ```bash
 # backend
@@ -43,49 +59,29 @@ cd ../frontend
 python3 -m http.server 3000
 ```
 
-- App: <http://localhost:3000>
-- API docs: <http://localhost:8000/docs>
+- App: http://localhost:3000
+- API docs: http://localhost:8000/docs
 
 ## MCP server (coaching tools)
 
-The LLM service runs in MCP mode and can call tool functions over your training data before composing an answer.
-
-Current toolset:
-
-- `get_week_summary`
-- `get_day_details`
-- `get_session_details`
-- `get_block_summary`
-- `get_recent_weeks_summary`
-- `get_salient_sessions`
-- `get_all_races`
-- `get_recent_context`
-- `submit_final_answer`
+The LLM service runs in MCP mode and can call tool functions over your training data before composing an answer. Key tools include `get_week_summary`, `get_day_details`, `get_session_details`, and more.
 
 Main implementation points:
 
 - Tool schema + executor: `backend/app/llm/mcp_tools.py`
 - LLM orchestration: `backend/app/llm/service.py`
-- Provider adapters (Mistral, Google Gemini, Echo): `backend/app/llm/providers.py`
-- Prompt loading/compilation: `backend/app/llm/prompt_loader.py`, `backend/app/llm/profile_prompt_compiler.py`
+- Provider adapters: `backend/app/llm/providers.py`
+- Prompt loading/compilation: `backend/app/llm/prompt_loader.py`
 
 ## Training load model (TL / ATL / CTL)
 
-Training OS uses **moving-time based TL as the canonical load signal** and derives:
+Training OS uses a moving-time based TL signal and derives:
 
 - **ATL**: 7-day exponential response
 - **CTL**: 42-day exponential response
 - **ACWR**: ATL / CTL
 
-### Empirical COROS-style TL reproduction
-
-The per-hour TL curve is modeled with a **4-parameter softplus regression** (`softplus4`) and tuned empirically to mimic observed COROS behavior. This was the best model after testing various parameterizations.
-
-- Parameters live in `backend/app/core/training_load_defaults.py`
-- Daily propagation is in `backend/app/training_load.py`
-- Full recompute is supported after imports/updates
-
-This gives a practical, stable approximation while keeping the model transparent and adjustable.
+Parameters live in `backend/app/core/training_load_defaults.py` and the propagation logic is implemented in `backend/app/training_load.py`.
 
 ## Strava sync and import
 
@@ -99,13 +95,6 @@ curl -X POST "http://localhost:8000/api/integrations/strava/import/backfill?per_
 # FIT import
 cd backend && source venv/bin/activate && python scripts/import_fit.py
 ```
-
-Key behavior:
-
-- Maps Strava sport types to normalized internal session types
-- Imports moving + elapsed durations, distance, elevation, HR metrics
-- Preserves manually edited fields where relevant (e.g., race flag)
-- Supports incremental refresh and full history backfill
 
 ## Tech stack and libraries
 
