@@ -11,17 +11,28 @@ GRID_INTERVAL_M = 20.0
 SMOOTHING_WINDOW_POINTS = 9  # centered rolling mean ~180 m
 SLOPE_CLAMP_PCT = 50.0
 
-def _build_slope_brackets() -> list[tuple[float | None, float | None, str]]:
-    boundaries = [-40.0, -35.0, -30.0, -25.0, -20.0, -15.0, -10.0, -5.0, -2.0,
-                  2.0, 5.0, 10.0, 15.0, 20.0, 25.0, 30.0, 35.0, 40.0]
-    brackets: list[tuple[float | None, float | None, str]] = [(None, boundaries[0], f"<{boundaries[0]:.0f}%")]
-    for lo, hi in zip(boundaries, boundaries[1:]):
-        brackets.append((lo, hi, f"{lo:.0f}..{hi:.0f}%"))
-    brackets.append((boundaries[-1], None, f">{boundaries[-1]:.0f}%"))
-    return brackets
+def slope_brackets_for(slopes: list[float]) -> list[tuple[float, float, str]]:
+    """Gradient brackets in 5% steps (with a flat -2..2 bucket), covering exactly the data range."""
+    if not slopes:
+        return []
+    lo_needed = min(slopes)
+    hi_needed = max(slopes)
+
+    boundaries = [-2.0, 2.0]
+    while boundaries[0] > lo_needed:
+        boundaries.insert(0, (boundaries[0] - 3.0) if boundaries[0] == -2.0 else boundaries[0] - 5.0)
+    while boundaries[-1] < hi_needed:
+        boundaries.append((boundaries[-1] + 3.0) if boundaries[-1] == 2.0 else boundaries[-1] + 5.0)
+
+    return [(lo, hi, f"{lo:.0f}..{hi:.0f}%") for lo, hi in zip(boundaries, boundaries[1:])]
 
 
-SLOPE_BRACKETS = _build_slope_brackets()
+def _bracket_index(s: float, brackets: list[tuple[float, float, str]]) -> int | None:
+    for idx, (lo, hi, _label) in enumerate(brackets):
+        # last bracket is inclusive of its upper bound so the max slope lands in it
+        if lo <= s < hi or (idx == len(brackets) - 1 and s <= hi):
+            return idx
+    return None
 
 
 class GPXProcessingError(ValueError):
@@ -100,13 +111,66 @@ def process_gpx(xml_text: str) -> dict[str, Any]:
     elevation_gain_m, elevation_loss_m, min_elevation_m, max_elevation_m, has_elevation.
     """
     points = _extract_points(xml_text)
-    has_elevation = all(p[2] is not None for p in points)
 
     # cumulative distance along raw points
     cum_m = [0.0]
     for i in range(1, len(points)):
         d = _haversine_m(points[i - 1][0], points[i - 1][1], points[i][0], points[i][1])
         cum_m.append(cum_m[-1] + d)
+
+    result = _build_track(points, cum_m)
+    result["name"] = _extract_name(xml_text)
+    return result
+
+
+def process_streams(streams: dict[str, Any]) -> dict[str, Any]:
+    """Build a processed track from Strava activity streams (latlng/altitude/distance).
+
+    Same output shape as process_gpx (name comes from the activity, set by the caller).
+    """
+
+    def _stream_data(key: str) -> list[Any] | None:
+        entry = streams.get(key) if isinstance(streams, dict) else None
+        data = entry.get("data") if isinstance(entry, dict) else None
+        return data if isinstance(data, list) and data else None
+
+    latlng = _stream_data("latlng")
+    dist_m = _stream_data("distance")
+    if not latlng or not dist_m or len(latlng) != len(dist_m):
+        raise GPXProcessingError("Activity streams are missing latlng or distance data.")
+
+    altitude = _stream_data("altitude")
+    has_altitude = bool(altitude) and len(altitude) == len(latlng)
+
+    points: list[tuple[float, float, float | None]] = []
+    cum_m: list[float] = []
+    last_m = -1.0
+    for i, pair in enumerate(latlng):
+        if not isinstance(pair, (list, tuple)) or len(pair) != 2:
+            continue
+        m = float(dist_m[i])
+        if m <= last_m:  # distance stream must be strictly increasing for interpolation
+            continue
+        last_m = m
+        ele = float(altitude[i]) if has_altitude and altitude[i] is not None else None
+        points.append((float(pair[0]), float(pair[1]), ele))
+        cum_m.append(m)
+
+    if len(points) < 2:
+        raise GPXProcessingError("Activity streams contain fewer than 2 GPS points.")
+
+    # normalize so the grid starts at 0
+    offset = cum_m[0]
+    cum_m = [m - offset for m in cum_m]
+
+    result = _build_track(points, cum_m)
+    result["name"] = None
+    return result
+
+
+def _build_track(points: list[tuple[float, float, float | None]], cum_m: list[float]) -> dict[str, Any]:
+    """Resample points onto the fixed grid, smooth elevation, compute slope and summary stats."""
+    has_elevation = all(p[2] is not None for p in points)
 
     total_m = cum_m[-1]
     if total_m <= 0:
@@ -177,7 +241,6 @@ def process_gpx(xml_text: str) -> dict[str, Any]:
     }
 
     return {
-        "name": _extract_name(xml_text),
         "track": track,
         "distance_km": round(total_m / 1000.0, 3),
         "elevation_gain_m": gain,
@@ -192,15 +255,15 @@ def compute_slope_histogram(slope_pct: list[float] | None, interval_m: float) ->
     """Distance per gradient bracket. Returns list of {label, min_pct, max_pct, km, pct_of_route}."""
     if not slope_pct:
         return []
-    counts = [0] * len(SLOPE_BRACKETS)
+    brackets = slope_brackets_for(slope_pct)
+    counts = [0] * len(brackets)
     for s in slope_pct:
-        for idx, (lo, hi, _label) in enumerate(SLOPE_BRACKETS):
-            if (lo is None or s >= lo) and (hi is None or s < hi):
-                counts[idx] += 1
-                break
+        idx = _bracket_index(s, brackets)
+        if idx is not None:
+            counts[idx] += 1
     total = len(slope_pct)
     out = []
-    for (lo, hi, label), count in zip(SLOPE_BRACKETS, counts):
+    for (lo, hi, label), count in zip(brackets, counts):
         out.append(
             {
                 "label": label,
@@ -333,13 +396,13 @@ def compare_route_with_activity(track: dict[str, Any], streams: dict[str, Any]) 
     slope_pct = track.get("slope_pct")
     if slope_pct:
         interval_km = float(track.get("interval_m", GRID_INTERVAL_M)) / 1000.0
-        for lo, hi, label in SLOPE_BRACKETS:
+        brackets = slope_brackets_for(slope_pct)
+        for bracket_idx, (lo, hi, label) in enumerate(brackets):
             paces: list[float] = []
             hrs: list[float] = []
             count = 0
             for i in range(n):
-                s = slope_pct[i]
-                if (lo is None or s >= lo) and (hi is None or s < hi):
+                if _bracket_index(slope_pct[i], brackets) == bracket_idx:
                     count += 1
                     if seg_pace[i] is not None:
                         paces.append(seg_pace[i])

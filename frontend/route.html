@@ -81,8 +81,9 @@
                     <option :value="r.id" x-text="`${r.name} (${(r.distance_km || 0).toFixed(1)} km${r.has_elevation ? ', D+ ' + Math.round(r.elevation_gain_m) + ' m' : ''})`"></option>
                 </template>
             </select>
-            <label class="px-3 py-2 bg-blue-600 text-white rounded shadow-sm hover:bg-blue-700 text-sm font-medium cursor-pointer">
-                <span x-text="isUploading ? 'Uploading…' : '⬆ Upload GPX'"></span>
+            <button @click="toggleNewFromActivity()" class="px-3 py-2 bg-blue-600 text-white rounded shadow-sm hover:bg-blue-700 text-sm font-medium">➕ New from activity</button>
+            <label class="px-3 py-2 bg-white border text-gray-700 rounded shadow-sm hover:bg-gray-50 text-sm font-medium cursor-pointer" title="Planning mode: upload a planned route">
+                <span x-text="isUploading ? 'Uploading…' : '⬆ Upload GPX (plan)'"></span>
                 <input type="file" accept=".gpx" class="hidden" @change="uploadGpx($event)" :disabled="isUploading">
             </label>
             <button x-show="route" x-cloak @click="deleteRoute()" class="px-3 py-2 bg-white border border-red-300 text-red-600 rounded shadow-sm hover:bg-red-50 text-sm font-medium">Delete route</button>
@@ -94,6 +95,30 @@
             </div>
         </div>
 
+        <!-- New route from Strava activity -->
+        <div x-show="showNewFromActivity" x-cloak class="bg-white p-4 rounded-lg shadow-sm border border-gray-200 mb-6">
+            <h3 class="text-sm font-semibold text-gray-700 mb-2">Analysis mode — create a route from a Strava activity</h3>
+            <div class="flex flex-wrap items-end gap-3">
+                <div>
+                    <label class="block text-xs font-medium text-gray-500">Races</label>
+                    <select x-model="newFromSessionId" class="mt-1 rounded-md border-gray-300 bg-white shadow-sm border p-2 text-sm min-w-[20rem]">
+                        <option value="">— Select a race —</option>
+                        <template x-for="s in raceSessions" :key="s.id">
+                            <option :value="s.id" x-text="`${s.date} — #${s.id} ${s.type}${s.distance_km ? ', ' + s.distance_km.toFixed(1) + ' km' : ''}${s.notes ? ' · ' + s.notes.split('\n')[0].slice(0, 50) : ''}`"></option>
+                        </template>
+                    </select>
+                </div>
+                <span class="text-sm text-gray-400 pb-2">or any session #</span>
+                <div>
+                    <input type="number" min="1" x-model="newFromSessionId" placeholder="e.g. 834" class="mt-1 w-28 rounded-md border-gray-300 shadow-sm border p-2 text-sm">
+                </div>
+                <button @click="createFromSession()" :disabled="!newFromSessionId || isCreatingFromSession" class="bg-blue-600 text-white py-2 px-4 rounded hover:bg-blue-700 text-sm font-medium disabled:opacity-50">
+                    <span x-text="isCreatingFromSession ? 'Creating…' : 'Create route'"></span>
+                </button>
+            </div>
+            <p x-show="newFromError" x-text="newFromError" class="text-sm text-red-600 mt-2"></p>
+        </div>
+
         <template x-if="route">
             <div>
                 <!-- Marker mode buttons -->
@@ -103,21 +128,35 @@
                     <span x-show="addMode" x-cloak class="text-sm text-gray-600">Click on the map or elevation profile to place the marker. Click the button again to cancel.</span>
                 </div>
 
-                <!-- Map -->
-                <div class="bg-white rounded-lg shadow-sm border border-gray-200 mb-6 overflow-hidden">
-                    <div id="route-map" class="h-[28rem] w-full z-0"></div>
+                <!-- Map + gradient distribution -->
+                <div class="flex gap-4 mb-6 items-stretch">
+                    <div class="bg-white rounded-lg shadow-sm border border-gray-200 overflow-hidden flex-1">
+                        <div id="route-map" class="h-[28rem] w-full z-0"></div>
+                    </div>
+                    <div x-show="route.has_elevation" class="bg-white p-3 rounded-lg shadow-sm border border-gray-200 w-1/6 min-w-[10rem] flex flex-col">
+                        <h3 class="text-xs font-semibold text-gray-600 mb-1">📊 Gradients</h3>
+                        <div class="flex-1 relative"><canvas id="histogram-chart"></canvas></div>
+                    </div>
                 </div>
 
                 <!-- Elevation profile -->
                 <div x-show="route.has_elevation" class="bg-white p-4 rounded-lg shadow-sm border border-gray-200 mb-6">
-                    <h3 class="text-lg font-semibold mb-2">⛰️ Elevation profile <span class="text-sm font-normal text-gray-500">(colored by gradient)</span></h3>
+                    <div class="flex items-center gap-4 mb-2">
+                        <h3 class="text-lg font-semibold">⛰️ Elevation profile <span class="text-sm font-normal text-gray-500">(colored by gradient)</span></h3>
+                        <template x-if="comparison">
+                            <div class="flex items-center gap-3 text-sm text-gray-700">
+                                <label class="inline-flex items-center gap-1.5 cursor-pointer">
+                                    <input type="checkbox" x-model="showPaceOverlay" @change="updateOverlayVisibility()">
+                                    <span class="text-blue-700">Pace</span>
+                                </label>
+                                <label class="inline-flex items-center gap-1.5 cursor-pointer">
+                                    <input type="checkbox" x-model="showHrOverlay" @change="updateOverlayVisibility()">
+                                    <span class="text-red-700">HR</span>
+                                </label>
+                            </div>
+                        </template>
+                    </div>
                     <div class="h-64"><canvas id="elevation-chart"></canvas></div>
-                </div>
-
-                <!-- Gradient histogram -->
-                <div x-show="route.has_elevation" class="bg-white p-4 rounded-lg shadow-sm border border-gray-200 mb-6 lg:max-w-2xl">
-                    <h3 class="text-lg font-semibold mb-2">📊 Gradient distribution</h3>
-                    <div class="h-56"><canvas id="histogram-chart"></canvas></div>
                 </div>
 
                 <!-- Strava match / comparison -->
@@ -166,10 +205,7 @@
                                 ⚠️ Distance differs by <span x-text="comparison.distance_mismatch_pct + '%'"></span> — the route and activity may not match; distance-based alignment can drift.
                             </p>
 
-                            <div class="mb-4">
-                                <h4 class="text-sm font-semibold text-gray-700 mb-1">Pace & heart rate along the route</h4>
-                                <div class="h-56"><canvas id="comparison-chart"></canvas></div>
-                            </div>
+                            <p class="text-xs text-gray-500 mb-3">Toggle Pace / HR on the elevation profile above to see them along the route.</p>
 
                             <div x-show="comparison.bracket_stats && comparison.bracket_stats.length > 0" class="lg:max-w-2xl">
                                 <h4 class="text-sm font-semibold text-gray-700 mb-1">Pace per gradient bracket</h4>

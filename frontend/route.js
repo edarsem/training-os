@@ -7,9 +7,9 @@ let trackPolyline = null;
 let hoverDot = null;
 let leafletMarkers = [];
 let actualPolyline = null;
+let highlightLayer = null;
 let elevationChart = null;
 let histogramChart = null;
-let comparisonChart = null;
 let currentTrack = null;
 
 const SLOPE_COLORS = [
@@ -45,12 +45,44 @@ function destroyVisuals() {
     if (map) { map.remove(); map = null; }
     trackPolyline = null;
     actualPolyline = null;
+    highlightLayer = null;
     hoverDot = null;
     leafletMarkers = [];
     if (elevationChart) { elevationChart.destroy(); elevationChart = null; }
     if (histogramChart) { histogramChart.destroy(); histogramChart = null; }
-    if (comparisonChart) { comparisonChart.destroy(); comparisonChart = null; }
     currentTrack = null;
+}
+
+function clearBracketHighlight() {
+    if (highlightLayer && map) { map.removeLayer(highlightLayer); highlightLayer = null; }
+    if (trackPolyline) trackPolyline.setStyle({ opacity: 1 });
+}
+
+function highlightBracketOnMap(bracket) {
+    if (!map || !currentTrack || !currentTrack.slope_pct) return;
+    clearBracketHighlight();
+    trackPolyline.setStyle({ opacity: 0.25 });
+
+    const lo = bracket.min_pct;
+    const hi = bracket.max_pct;
+    const color = colorForSlope((lo + hi) / 2);
+    const segments = [];
+    let run = null;
+    for (let i = 0; i < currentTrack.n; i++) {
+        const s = currentTrack.slope_pct[i];
+        if (s >= lo && s <= hi) {
+            if (!run) run = [];
+            run.push([currentTrack.lat[i], currentTrack.lng[i]]);
+        } else if (run) {
+            if (run.length > 1) segments.push(run);
+            run = null;
+        }
+    }
+    if (run && run.length > 1) segments.push(run);
+
+    highlightLayer = L.layerGroup(
+        segments.map((seg) => L.polyline(seg, { color, weight: 6, opacity: 1 }))
+    ).addTo(map);
 }
 
 function nearestTrackIndex(lat, lng) {
@@ -115,6 +147,14 @@ document.addEventListener('alpine:init', () => {
         isMatching: false,
         matchError: '',
 
+        showNewFromActivity: false,
+        raceSessions: [],
+        newFromSessionId: '',
+        isCreatingFromSession: false,
+        newFromError: '',
+        showPaceOverlay: false,
+        showHrOverlay: false,
+
         chatMessages: [],
         chatInput: '',
         chatError: '',
@@ -150,6 +190,8 @@ document.addEventListener('alpine:init', () => {
             this.matchDate = '';
             this.matchCandidates = [];
             this.matchError = '';
+            this.showPaceOverlay = false;
+            this.showHrOverlay = false;
             if (!routeId) return;
             try {
                 const res = await fetch(`${API_BASE}/routes/${routeId}`);
@@ -193,6 +235,43 @@ document.addEventListener('alpine:init', () => {
             } finally {
                 this.isUploading = false;
                 event.target.value = '';
+            }
+        },
+
+        async toggleNewFromActivity() {
+            this.showNewFromActivity = !this.showNewFromActivity;
+            this.newFromError = '';
+            if (this.showNewFromActivity && this.raceSessions.length === 0) {
+                try {
+                    const res = await fetch(`${API_BASE}/sessions/races`);
+                    if (res.ok) this.raceSessions = (await res.json()).reverse();
+                } catch (e) {
+                    console.error('Failed to fetch race sessions', e);
+                }
+            }
+        },
+
+        async createFromSession() {
+            if (!this.newFromSessionId || this.isCreatingFromSession) return;
+            this.newFromError = '';
+            this.isCreatingFromSession = true;
+            try {
+                const res = await fetch(`${API_BASE}/routes/from-session`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ session_id: Number(this.newFromSessionId) }),
+                });
+                const data = await res.json();
+                if (!res.ok) throw new Error(data?.detail || 'Failed to create route from activity');
+                this.showNewFromActivity = false;
+                this.newFromSessionId = '';
+                await this.fetchRoutes();
+                this.selectedRouteId = String(data.id);
+                await this.loadRoute(this.selectedRouteId);
+            } catch (e) {
+                this.newFromError = e?.message || 'Failed to create route from activity';
+            } finally {
+                this.isCreatingFromSession = false;
             }
         },
 
@@ -314,6 +393,26 @@ document.addEventListener('alpine:init', () => {
                             borderColor: '#92400e',
                             borderWidth: 1,
                         },
+                        {
+                            label: 'Pace (min/km)',
+                            data: [],
+                            yAxisID: 'pace',
+                            borderColor: 'rgba(37, 99, 235, 0.8)',
+                            pointRadius: 0,
+                            borderWidth: 1.5,
+                            spanGaps: true,
+                            hidden: true,
+                        },
+                        {
+                            label: 'HR (bpm)',
+                            data: [],
+                            yAxisID: 'hr',
+                            borderColor: 'rgba(220, 38, 38, 0.7)',
+                            pointRadius: 0,
+                            borderWidth: 1.5,
+                            spanGaps: true,
+                            hidden: true,
+                        },
                     ],
                 },
                 options: {
@@ -338,6 +437,18 @@ document.addEventListener('alpine:init', () => {
                             max: track.dist_km[track.dist_km.length - 1],
                         },
                         y: { title: { display: true, text: 'Elevation (m)' } },
+                        pace: {
+                            position: 'right',
+                            reverse: true,
+                            display: false,
+                            title: { display: true, text: 'Pace (min/km)' },
+                        },
+                        hr: {
+                            position: 'right',
+                            display: false,
+                            grid: { drawOnChartArea: false },
+                            title: { display: true, text: 'HR (bpm)' },
+                        },
                     },
                     plugins: {
                         legend: { display: false },
@@ -349,6 +460,8 @@ document.addEventListener('alpine:init', () => {
                                         const m = item.raw.marker;
                                         return `${m.kind === 'ravito' ? '🥤' : '📝'} ${m.label || m.kind}`;
                                     }
+                                    if (item.datasetIndex === 2) return `Pace ${self.formatPace(item.parsed.y)}`;
+                                    if (item.datasetIndex === 3) return `HR ${Math.round(item.parsed.y)} bpm`;
                                     const slope = Math.round(track.slope_pct[item.dataIndex]);
                                     return `${Math.round(item.parsed.y)} m · ${slope > 0 ? '+' : ''}${slope}%`;
                                 },
@@ -376,7 +489,8 @@ document.addEventListener('alpine:init', () => {
         renderHistogramChart() {
             const canvas = document.getElementById('histogram-chart');
             if (!canvas || !this.route) return;
-            const histogram = (this.route.slope_histogram || []).filter((b) => b.km > 0);
+            // steepest climbs at the top
+            const histogram = (this.route.slope_histogram || []).filter((b) => b.km > 0).reverse();
 
             histogramChart = new Chart(canvas, {
                 type: 'bar',
@@ -385,17 +499,24 @@ document.addEventListener('alpine:init', () => {
                     datasets: [{
                         label: 'km',
                         data: histogram.map((b) => b.km),
-                        backgroundColor: histogram.map((b) => colorForSlope(
-                            b.min_pct === null ? -45 : b.max_pct === null ? 45 : (b.min_pct + b.max_pct) / 2
-                        )),
+                        backgroundColor: histogram.map((b) => colorForSlope((b.min_pct + b.max_pct) / 2)),
                     }],
                 },
                 options: {
+                    indexAxis: 'y',
                     responsive: true,
                     maintainAspectRatio: false,
                     animation: false,
+                    onHover: (event, elements) => {
+                        if (elements.length > 0) {
+                            highlightBracketOnMap(histogram[elements[0].index]);
+                        } else {
+                            clearBracketHighlight();
+                        }
+                    },
                     scales: {
-                        y: { title: { display: true, text: 'km' } },
+                        x: { title: { display: true, text: 'km' }, ticks: { maxTicksLimit: 4 } },
+                        y: { ticks: { font: { size: 10 } } },
                     },
                     plugins: {
                         legend: { display: false },
@@ -410,6 +531,7 @@ document.addEventListener('alpine:init', () => {
                     },
                 },
             });
+            canvas.addEventListener('mouseleave', clearBracketHighlight);
         },
 
         // --- Markers ---
@@ -547,7 +669,7 @@ document.addEventListener('alpine:init', () => {
             this.comparison = data;
             this.$nextTick(() => {
                 this.renderActualPolyline();
-                this.renderComparisonChart();
+                this.updateOverlayData();
             });
         },
 
@@ -558,8 +680,10 @@ document.addEventListener('alpine:init', () => {
                 if (!res.ok) return;
                 this.route.session_id = null;
                 this.comparison = null;
+                this.showPaceOverlay = false;
+                this.showHrOverlay = false;
                 if (actualPolyline && map) { map.removeLayer(actualPolyline); actualPolyline = null; }
-                if (comparisonChart) { comparisonChart.destroy(); comparisonChart = null; }
+                this.updateOverlayData();
             } catch (e) {
                 console.error('Failed to unlink session', e);
             }
@@ -574,78 +698,22 @@ document.addEventListener('alpine:init', () => {
                 .bindTooltip('Actual activity').addTo(map);
         },
 
-        renderComparisonChart() {
-            const canvas = document.getElementById('comparison-chart');
-            if (!canvas || !currentTrack || !this.comparison) return;
-            if (comparisonChart) { comparisonChart.destroy(); comparisonChart = null; }
-            const self = this;
-            const dist = currentTrack.dist_km;
+        updateOverlayData() {
+            if (!elevationChart) return;
+            elevationChart.data.datasets[2].data = this.comparison ? this.comparison.pace_min_per_km : [];
+            elevationChart.data.datasets[3].data = this.comparison ? this.comparison.hr_bpm : [];
+            this.updateOverlayVisibility();
+        },
 
-            comparisonChart = new Chart(canvas, {
-                type: 'line',
-                data: {
-                    labels: dist,
-                    datasets: [
-                        {
-                            label: 'Pace (min/km)',
-                            data: this.comparison.pace_min_per_km,
-                            yAxisID: 'pace',
-                            borderColor: '#2563eb',
-                            pointRadius: 0,
-                            borderWidth: 2,
-                            spanGaps: true,
-                        },
-                        {
-                            label: 'HR (bpm)',
-                            data: this.comparison.hr_bpm,
-                            yAxisID: 'hr',
-                            borderColor: '#dc2626',
-                            pointRadius: 0,
-                            borderWidth: 1.5,
-                            spanGaps: true,
-                        },
-                    ],
-                },
-                options: {
-                    responsive: true,
-                    maintainAspectRatio: false,
-                    animation: false,
-                    interaction: { mode: 'index', intersect: false },
-                    onHover: (event, elements, chart) => {
-                        const points = chart.getElementsAtEventForMode(event, 'index', { intersect: false }, true);
-                        if (points.length > 0) showHoverAtIndex(points[0].index);
-                    },
-                    scales: {
-                        x: {
-                            type: 'linear',
-                            title: { display: true, text: 'Distance (km)' },
-                            min: 0,
-                            max: dist[dist.length - 1],
-                        },
-                        pace: {
-                            position: 'left',
-                            reverse: true,
-                            title: { display: true, text: 'Pace (min/km)' },
-                        },
-                        hr: {
-                            position: 'right',
-                            grid: { drawOnChartArea: false },
-                            title: { display: true, text: 'HR (bpm)' },
-                        },
-                    },
-                    plugins: {
-                        tooltip: {
-                            callbacks: {
-                                title: (items) => `km ${Number(items[0].parsed.x).toFixed(2)}`,
-                                label: (item) => item.datasetIndex === 0
-                                    ? `Pace ${self.formatPace(item.parsed.y)}`
-                                    : `HR ${Math.round(item.parsed.y)} bpm`,
-                            },
-                        },
-                    },
-                },
-            });
-            canvas.addEventListener('mouseleave', hideHover);
+        updateOverlayVisibility() {
+            if (!elevationChart) return;
+            const showPace = !!(this.comparison && this.showPaceOverlay);
+            const showHr = !!(this.comparison && this.showHrOverlay);
+            elevationChart.data.datasets[2].hidden = !showPace;
+            elevationChart.data.datasets[3].hidden = !showHr;
+            elevationChart.options.scales.pace.display = showPace;
+            elevationChart.options.scales.hr.display = showHr;
+            elevationChart.update('none');
         },
 
         formatPace(pace) {

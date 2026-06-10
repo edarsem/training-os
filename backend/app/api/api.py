@@ -21,6 +21,7 @@ from app.core.gpx import (
     compute_slope_histogram,
     interpolate_point_at_distance,
     process_gpx,
+    process_streams,
 )
 from app.core.strava import StravaAPIError, StravaClient, StravaConfigError
 from app.llm.service import LLMConfigurationError, LLMProviderError, TrainingOSLLMService
@@ -352,6 +353,12 @@ def update_session(session_id: int, session: schemas.SessionUpdate, db: Session 
         raise HTTPException(status_code=404, detail="Session not found")
     return db_session
 
+@router.get("/sessions/races", response_model=List[schemas.SessionResponse])
+def read_race_sessions(db: Session = Depends(get_db)):
+    """Get all sessions marked as race, oldest first."""
+    return crud.get_race_sessions(db)
+
+
 @router.delete("/sessions/{session_id}")
 def delete_session(session_id: int, db: Session = Depends(get_db)):
     """Delete a session."""
@@ -628,6 +635,93 @@ def _build_comparison_response(route: models.Route, session: models.Session) -> 
     )
 
 
+def _ensure_session_gps_streams(session: models.Session) -> dict | None:
+    """Fetch and store the session's Strava GPS streams if missing. Returns the activity detail (or None if streams were already stored)."""
+    if session.gps_stream_json:
+        return None
+
+    client = StravaClient()
+    try:
+        activity = _find_strava_activity_for_session(client, session)
+        if activity is None or activity.get("id") is None:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Could not find a Strava activity matching session {session.id} ({session.date}).",
+            )
+        detail = client.get_activity_by_id(int(activity["id"])).get("activity", {})
+        streams = client.get_activity_gps_streams(int(activity["id"]))
+    except StravaConfigError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except StravaAPIError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
+
+    if not streams.get("distance") or not streams.get("time"):
+        raise HTTPException(status_code=400, detail="This Strava activity has no distance/time streams (likely no GPS).")
+
+    session.gps_stream_json = json.dumps(streams, ensure_ascii=False)
+    return detail if isinstance(detail, dict) else None
+
+
+@router.post("/routes/from-session", response_model=schemas.RouteDetailResponse)
+def create_route_from_session(payload: schemas.RouteMatchRequest, db: Session = Depends(get_db)):
+    """Create a route directly from a Strava activity (analysis mode): the activity's GPS track becomes the route."""
+    session = crud.get_session_by_id(db, payload.session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail=f"Session {payload.session_id} not found")
+
+    activity_detail = _ensure_session_gps_streams(session)
+    if activity_detail is None:
+        # streams were already stored; still try to get the activity description (non-fatal)
+        try:
+            client = StravaClient()
+            activity = _find_strava_activity_for_session(client, session)
+            if activity is not None and activity.get("id") is not None:
+                activity_detail = client.get_activity_by_id(int(activity["id"])).get("activity")
+        except (StravaConfigError, StravaAPIError, HTTPException):
+            activity_detail = None
+
+    streams = json.loads(session.gps_stream_json)
+
+    try:
+        processed = process_streams(streams)
+    except GPXProcessingError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    name = None
+    description = None
+    if activity_detail:
+        name = str(activity_detail.get("name") or "").strip() or None
+        description = str(activity_detail.get("description") or "").strip() or None
+    if not name and session.notes:
+        name = str(session.notes).splitlines()[0].strip() or None
+    if not description and session.notes:
+        lines = str(session.notes).splitlines()
+        description = "\n".join(lines[1:]).strip() or None
+    if not name:
+        name = f"{session.type} {session.date}"
+
+    route = crud.create_route(
+        db,
+        name=name,
+        source_filename=None,
+        gpx_xml=None,
+        track_json=json.dumps(processed["track"], ensure_ascii=False),
+        distance_km=processed["distance_km"],
+        elevation_gain_m=processed["elevation_gain_m"],
+        elevation_loss_m=processed["elevation_loss_m"],
+        min_elevation_m=processed["min_elevation_m"],
+        max_elevation_m=processed["max_elevation_m"],
+        has_elevation=processed["has_elevation"],
+    )
+    route.session_id = session.id
+    if description:
+        route.notes = description
+    db.commit()
+    db.refresh(route)
+
+    return _route_detail_response(route, [])
+
+
 @router.post("/routes/{route_id}/match-session", response_model=schemas.RouteComparisonResponse)
 def match_route_session(route_id: int, payload: schemas.RouteMatchRequest, db: Session = Depends(get_db)):
     """Link a route to a session: finds the Strava activity, fetches its GPS streams, and returns the comparison."""
@@ -638,25 +732,7 @@ def match_route_session(route_id: int, payload: schemas.RouteMatchRequest, db: S
     if not session:
         raise HTTPException(status_code=404, detail=f"Session {payload.session_id} not found")
 
-    if not session.gps_stream_json:
-        client = StravaClient()
-        try:
-            activity = _find_strava_activity_for_session(client, session)
-            if activity is None or activity.get("id") is None:
-                raise HTTPException(
-                    status_code=404,
-                    detail=f"Could not find a Strava activity matching session {session.id} ({session.date}).",
-                )
-            streams = client.get_activity_gps_streams(int(activity["id"]))
-        except StravaConfigError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
-        except StravaAPIError as exc:
-            raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
-
-        if not streams.get("distance") or not streams.get("time"):
-            raise HTTPException(status_code=400, detail="This Strava activity has no distance/time streams (likely no GPS).")
-
-        session.gps_stream_json = json.dumps(streams, ensure_ascii=False)
+    _ensure_session_gps_streams(session)
 
     route.session_id = session.id
     db.commit()
