@@ -484,7 +484,7 @@ document.addEventListener('alpine:init', () => {
                                         const m = item.raw.marker;
                                         return `${m.kind === 'ravito' ? '🥤' : '📝'} ${m.label || m.kind}`;
                                     }
-                                    if (item.datasetIndex === 2) return `Pace ${self.formatPace(item.parsed.y)}`;
+                                    if (item.datasetIndex === 2) return `Moving pace ${self.formatPace(item.parsed.y)}`;
                                     if (item.datasetIndex === 3) return `HR ${Math.round(item.parsed.y)} bpm`;
                                     const slope = Math.round(track.slope_pct[item.dataIndex]);
                                     return `${Math.round(item.parsed.y)} m · ${slope > 0 ? '+' : ''}${slope}%`;

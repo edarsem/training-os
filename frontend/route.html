@@ -219,13 +219,15 @@
                 <template x-if="comparison">
                     <div class="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-6">
                         <div class="bg-white p-4 rounded-lg shadow-sm border border-gray-200">
-                            <h3 class="text-lg font-semibold mb-2">⏱️ Per km</h3>
+                            <h3 class="text-lg font-semibold mb-1">⏱️ Per km</h3>
+                            <p class="text-xs text-gray-500 mb-2">Time is elapsed; Stop is paused time within the km (ravito, break).</p>
                             <div class="max-h-96 overflow-y-auto">
                                 <table class="w-full text-sm border-collapse">
                                     <thead class="sticky top-0 bg-white">
                                         <tr class="text-left text-gray-500 border-b border-gray-200">
                                             <th class="py-1 pr-3 font-medium">Km</th>
                                             <th class="py-1 pr-3 font-medium">Time</th>
+                                            <th class="py-1 pr-3 font-medium">Stop</th>
                                             <th class="py-1 pr-3 font-medium">Avg HR (bpm)</th>
                                             <th class="py-1 pr-3 font-medium">D+ (m)</th>
                                             <th class="py-1 font-medium">D− (m)</th>
@@ -236,6 +238,7 @@
                                             <tr class="border-b border-gray-100">
                                                 <td class="py-1 pr-3" x-text="s.km"></td>
                                                 <td class="py-1 pr-3" x-text="formatSplitTime(s.duration_s)"></td>
+                                                <td class="py-1 pr-3" :class="(s.stopped_s || 0) >= 15 ? 'text-amber-600 font-medium' : 'text-gray-400'" x-text="(s.stopped_s || 0) >= 15 ? formatSplitTime(s.stopped_s) : '—'"></td>
                                                 <td class="py-1 pr-3" x-text="s.avg_hr_bpm !== null ? Math.round(s.avg_hr_bpm) : '—'"></td>
                                                 <td class="py-1 pr-3" x-text="s.d_plus_m !== null ? s.d_plus_m : '—'"></td>
                                                 <td class="py-1" x-text="s.d_minus_m !== null ? s.d_minus_m : '—'"></td>
@@ -246,14 +249,15 @@
                             </div>
                         </div>
                         <div class="bg-white p-4 rounded-lg shadow-sm border border-gray-200">
-                            <h3 class="text-lg font-semibold mb-2">📐 Per gradient bracket</h3>
+                            <h3 class="text-lg font-semibold mb-1">📐 Per gradient bracket</h3>
+                            <p class="text-xs text-gray-500 mb-2">Moving pace — stops excluded.</p>
                             <div class="max-h-96 overflow-y-auto">
                                 <table class="w-full text-sm border-collapse">
                                     <thead class="sticky top-0 bg-white">
                                         <tr class="text-left text-gray-500 border-b border-gray-200">
                                             <th class="py-1 pr-3 font-medium">Gradient</th>
                                             <th class="py-1 pr-3 font-medium">Km</th>
-                                            <th class="py-1 pr-3 font-medium">Avg pace (min/km)</th>
+                                            <th class="py-1 pr-3 font-medium">Moving pace (min/km)</th>
                                             <th class="py-1 font-medium">Avg HR (bpm)</th>
                                         </tr>
                                     </thead>

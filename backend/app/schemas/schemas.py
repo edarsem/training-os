@@ -293,6 +293,10 @@ class RouteComparisonResponse(BaseModel):
     activity_distance_km: float
     distance_mismatch_pct: float
     distance_mismatch_warning: bool
+    has_moving_data: bool = False
+    total_elapsed_s: Optional[int] = None
+    total_moving_s: Optional[int] = None
+    total_stopped_s: Optional[int] = None
     pace_min_per_km: List[Optional[float]] = Field(default_factory=list)
     hr_bpm: List[Optional[float]] = Field(default_factory=list)
     km_splits: List[dict[str, Any]] = Field(default_factory=list)

@@ -318,6 +318,16 @@ def compare_route_with_activity(track: dict[str, Any], streams: dict[str, Any]) 
 
     latlng = _stream_data("latlng")
     hr = _stream_data("heartrate")
+    moving = _stream_data("moving")
+    has_moving_data = bool(moving) and len(moving) == len(time_s)
+
+    # cumulative moving time per sample: stopped periods (ravitos, pauses) don't advance it
+    cum_moving_s: list[float] | None = None
+    if has_moving_data:
+        cum_moving_s = [0.0]
+        for i in range(1, len(time_s)):
+            dt = float(time_s[i]) - float(time_s[i - 1])
+            cum_moving_s.append(cum_moving_s[-1] + (dt if moving[i] and dt > 0 else 0.0))
 
     route_dist_km = track["dist_km"]
     n = len(route_dist_km)
@@ -326,20 +336,26 @@ def compare_route_with_activity(track: dict[str, Any], streams: dict[str, Any]) 
 
     mismatch_pct = abs(activity_total_km - route_total_km) / route_total_km * 100.0 if route_total_km > 0 else 0.0
 
-    # time (and HR) at each route grid distance, interpolated over the activity distance stream
+    # time (elapsed + moving) and HR at each route grid distance, interpolated over the activity distance stream
     grid_time: list[float | None] = []
+    grid_moving_time: list[float | None] = []
     grid_hr: list[float | None] = []
     j = 0
     for dk in route_dist_km:
         target_m = dk * 1000.0
         if target_m > dist_m[-1]:
             grid_time.append(None)
+            grid_moving_time.append(None)
             grid_hr.append(None)
             continue
         while j < len(dist_m) - 2 and dist_m[j + 1] < target_m:
             j += 1
         x0, x1 = float(dist_m[j]), float(dist_m[j + 1])
         grid_time.append(_interp(target_m, x0, x1, float(time_s[j]), float(time_s[j + 1])))
+        if cum_moving_s is not None:
+            grid_moving_time.append(_interp(target_m, x0, x1, cum_moving_s[j], cum_moving_s[j + 1]))
+        else:
+            grid_moving_time.append(grid_time[-1])
         if hr and len(hr) == len(dist_m):
             try:
                 grid_hr.append(_interp(target_m, x0, x1, float(hr[j]), float(hr[j + 1])))
@@ -348,10 +364,10 @@ def compare_route_with_activity(track: dict[str, Any], streams: dict[str, Any]) 
         else:
             grid_hr.append(None)
 
-    # pace per grid segment (min/km), lightly smoothed over ~9 points like elevation
+    # moving pace per grid segment (min/km), stops excluded; lightly smoothed over ~9 points like elevation
     seg_pace: list[float | None] = [None] * n
     for i in range(1, n):
-        t0, t1 = grid_time[i - 1], grid_time[i]
+        t0, t1 = grid_moving_time[i - 1], grid_moving_time[i]
         dd_km = route_dist_km[i] - route_dist_km[i - 1]
         if t0 is None or t1 is None or dd_km <= 0:
             continue
@@ -368,17 +384,21 @@ def compare_route_with_activity(track: dict[str, Any], streams: dict[str, Any]) 
             smoothed.append(round(sum(window) / len(window), 3) if window else None)
         seg_pace = smoothed
 
-    # per-km splits
+    # per-km splits (elapsed time, stopped time shown separately)
     ele_m = track.get("ele_m")
     splits: list[dict[str, Any]] = []
     km = 1
     prev_time = grid_time[0]
+    prev_moving = grid_moving_time[0]
     prev_idx = 0
     for i in range(1, n):
         if route_dist_km[i] >= km or i == n - 1:
             t = grid_time[i]
+            mt = grid_moving_time[i]
             if prev_time is not None and t is not None and route_dist_km[i] > route_dist_km[prev_idx]:
                 dur_s = t - prev_time
+                moving_s = (mt - prev_moving) if (mt is not None and prev_moving is not None) else dur_s
+                stopped_s = max(0.0, dur_s - moving_s)
                 d_km = route_dist_km[i] - route_dist_km[prev_idx]
                 hr_window = [h for h in grid_hr[prev_idx:i + 1] if h is not None]
                 gain = loss = None
@@ -396,13 +416,15 @@ def compare_route_with_activity(track: dict[str, Any], streams: dict[str, Any]) 
                     {
                         "km": km if route_dist_km[i] >= km else round(route_dist_km[i], 2),
                         "duration_s": round(dur_s),
-                        "pace_min_per_km": round(dur_s / 60.0 / d_km, 2),
+                        "stopped_s": round(stopped_s),
+                        "pace_min_per_km": round(moving_s / 60.0 / d_km, 2),
                         "avg_hr_bpm": round(sum(hr_window) / len(hr_window), 0) if hr_window else None,
                         "d_plus_m": gain,
                         "d_minus_m": loss,
                     }
                 )
             prev_time = grid_time[i]
+            prev_moving = grid_moving_time[i]
             prev_idx = i
             km += 1
 
@@ -442,11 +464,18 @@ def compare_route_with_activity(track: dict[str, Any], streams: dict[str, Any]) 
         step = max(1, len(latlng) // 2000)
         actual_latlng = [[round(float(p[0]), 6), round(float(p[1]), 6)] for p in latlng[::step] if isinstance(p, (list, tuple)) and len(p) == 2]
 
+    total_elapsed_s = round(float(time_s[-1]) - float(time_s[0]))
+    total_moving_s = round(cum_moving_s[-1]) if cum_moving_s is not None else total_elapsed_s
+
     return {
         "route_distance_km": round(route_total_km, 2),
         "activity_distance_km": round(activity_total_km, 2),
         "distance_mismatch_pct": round(mismatch_pct, 1),
         "distance_mismatch_warning": mismatch_pct > 5.0,
+        "has_moving_data": has_moving_data,
+        "total_elapsed_s": total_elapsed_s,
+        "total_moving_s": total_moving_s,
+        "total_stopped_s": max(0, total_elapsed_s - total_moving_s),
         "pace_min_per_km": seg_pace,
         "hr_bpm": [round(h, 0) if h is not None else None for h in grid_hr],
         "km_splits": splits,

@@ -7,7 +7,6 @@ from typing import Any
 from sqlalchemy.orm import Session as DBSession
 
 from app.core.config import settings
-from app.crud import crud
 from app.llm.mcp_tools import execute_mcp_tool, get_mcp_tools_schema
 from app.llm.profile_prompt_compiler import ensure_compiled_profile_prompt
 from app.llm.prompt_loader import PromptRepository
@@ -172,14 +171,11 @@ class TrainingOSLLMService:
         context = context_builder.build_context(request)
 
         if request.route_id is not None:
-            route = crud.get_route(self.db, int(request.route_id))
-            if route:
-                from app.core.gpx import build_route_text_summary, compute_slope_histogram
+            from app.llm.mcp_tools import get_route_details_tool
 
-                track = json.loads(route.track_json)
-                histogram = compute_slope_histogram(track.get("slope_pct"), float(track.get("interval_m", 20.0)))
-                markers = crud.list_route_markers(self.db, route.id)
-                context["current_route"] = build_route_text_summary(route, markers, histogram)
+            details = get_route_details_tool(self.db, route_id=int(request.route_id))
+            if details.get("text"):
+                context["current_route"] = details["text"]
 
         user_payload = {
             "question": request.query,
@@ -266,15 +262,18 @@ class TrainingOSLLMService:
             ),
         }
 
+        route_details_text: str | None = None
         if request.route_id is not None:
-            current_route: dict[str, Any] = {"route_id": int(request.route_id)}
-            route = crud.get_route(self.db, int(request.route_id))
-            if route:
-                current_route["name"] = route.name
-            user_payload["current_route"] = current_route
+            from app.llm.mcp_tools import get_route_details_tool
+
+            details = get_route_details_tool(self.db, route_id=int(request.route_id))
+            route_details_text = details.get("text")
+            user_payload["current_route_details"] = route_details_text or details
             user_payload["instruction"] += (
-                " The user is currently viewing this route; call get_route_details with this route_id "
-                "to get its distance, elevation, gradient distribution, markers and notes."
+                " current_route_details describes the route the user is looking at right now "
+                "(including actual performance data if the route is linked to a completed activity). "
+                "Ground your answer in it — do not call get_route_details for this route, you already have it. "
+                "Use other tools only for additional context (training history, other routes, etc.)."
             )
 
         user_message_content = json.dumps(user_payload, ensure_ascii=False)
@@ -444,10 +443,12 @@ class TrainingOSLLMService:
                 "question": request.query,
                 "now_iso_date": now_iso,
                 "language": language,
+                "current_route_details": route_details_text,
                 "tool_results": [entry for entry in mcp_trace if entry.get("type") == "tool_call" and entry.get("name") != "submit_final_answer"],
                 "assistant_intermediate": [entry.get("content") for entry in mcp_trace if entry.get("type") == "assistant_intermediate"],
                 "instruction": (
-                    "Write the final answer for the user using only these tool results. "
+                    "Write the final answer for the user using only these tool results "
+                    "and current_route_details (the route the user is viewing) when present. "
                     "Do not invent data. If a needed value is missing, say it clearly."
                 ),
             }

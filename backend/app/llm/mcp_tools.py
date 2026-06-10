@@ -1313,19 +1313,50 @@ def get_route_details_tool(db: DBSession, *, route_id: int) -> dict[str, Any]:
                 + (f", distance mismatch {comparison['distance_mismatch_pct']}% — alignment approximate" if comparison["distance_mismatch_warning"] else "")
                 + "):"
             )
+            if comparison.get("total_elapsed_s") is not None:
+                total_line = f"Total time: {_fmt_split_time(comparison['total_elapsed_s'])} elapsed"
+                if comparison.get("has_moving_data"):
+                    total_line += (
+                        f", {_fmt_split_time(comparison['total_moving_s'])} moving, "
+                        f"{_fmt_split_time(comparison['total_stopped_s'])} stopped"
+                    )
+                lines.append(total_line)
+
+            day_before = _compute_shape_snapshot(db, on_date=session.date - timedelta(days=1))
+            day_of = _compute_shape_snapshot(db, on_date=session.date)
+            lines.append(
+                "Form around the activity: "
+                f"day before — Shape (CTL) {_fmt_metric(day_before.get('shape_ctl'), 0)}, ACWR {_fmt_percent_no_decimal(day_before.get('acwr'))} (freshness going in); "
+                f"activity day — Shape (CTL) {_fmt_metric(day_of.get('shape_ctl'), 0)}, ACWR {_fmt_percent_no_decimal(day_of.get('acwr'))} (after the activity's load)."
+            )
+
+            if comparison.get("has_moving_data"):
+                lines.append(
+                    "Note: all paces below are MOVING paces (stops such as ravitos/aid stations excluded). "
+                    "Per-km splits show elapsed time with stopped time separately — a km with large stopped time "
+                    "likely contains a ravito or break, so judge effort there by its moving pace and HR."
+                )
+            else:
+                lines.append(
+                    "Note: no moving/stopped data available for this activity — paces below include any stops "
+                    "(a slow km on easy terrain may just be a break)."
+                )
+
             brackets = [b for b in comparison.get("bracket_stats") or [] if b.get("avg_pace_min_per_km") is not None]
             if brackets:
-                lines.append("Pace per gradient bracket:")
+                lines.append("Moving pace per gradient bracket:")
                 for b in brackets:
                     hr_text = f", HR {b['avg_hr_bpm']:.0f} bpm" if b.get("avg_hr_bpm") is not None else ""
                     lines.append(f"  {b['label']}: {b['km']} km, avg {_fmt_pace(b['avg_pace_min_per_km'])}{hr_text}")
             splits = comparison.get("km_splits") or []
             if splits:
-                lines.append("Per-km splits (km: time, HR, D+/D-):")
+                lines.append("Per-km splits (km: elapsed time [stopped time if any], HR, D+/D-):")
                 for s in splits:
+                    stop_s = int(s.get("stopped_s") or 0)
+                    stop_text = f" [stopped {_fmt_split_time(stop_s)}]" if stop_s >= 15 else ""
                     hr_text = f", {s['avg_hr_bpm']:.0f} bpm" if s.get("avg_hr_bpm") is not None else ""
                     dplus = f", +{s['d_plus_m']}m/-{s['d_minus_m']}m" if s.get("d_plus_m") is not None else ""
-                    lines.append(f"  km {s['km']}: {_fmt_split_time(s.get('duration_s'))}{hr_text}{dplus}")
+                    lines.append(f"  km {s['km']}: {_fmt_split_time(s.get('duration_s'))}{stop_text}{hr_text}{dplus}")
 
     return {"text": "\n".join(lines)}
 
