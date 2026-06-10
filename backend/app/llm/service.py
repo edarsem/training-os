@@ -7,6 +7,7 @@ from typing import Any
 from sqlalchemy.orm import Session as DBSession
 
 from app.core.config import settings
+from app.crud import crud
 from app.llm.mcp_tools import execute_mcp_tool, get_mcp_tools_schema
 from app.llm.profile_prompt_compiler import ensure_compiled_profile_prompt
 from app.llm.prompt_loader import PromptRepository
@@ -170,6 +171,16 @@ class TrainingOSLLMService:
         context_builder = TrainingDataQueryService(self.db)
         context = context_builder.build_context(request)
 
+        if request.route_id is not None:
+            route = crud.get_route(self.db, int(request.route_id))
+            if route:
+                from app.core.gpx import build_route_text_summary, compute_slope_histogram
+
+                track = json.loads(route.track_json)
+                histogram = compute_slope_histogram(track.get("slope_pct"), float(track.get("interval_m", 20.0)))
+                markers = crud.list_route_markers(self.db, route.id)
+                context["current_route"] = build_route_text_summary(route, markers, histogram)
+
         user_payload = {
             "question": request.query,
             "context": context,
@@ -254,6 +265,18 @@ class TrainingOSLLMService:
                 "When done with tool calls and ready to answer the user query, call submit_final_answer with no arguments."
             ),
         }
+
+        if request.route_id is not None:
+            current_route: dict[str, Any] = {"route_id": int(request.route_id)}
+            route = crud.get_route(self.db, int(request.route_id))
+            if route:
+                current_route["name"] = route.name
+            user_payload["current_route"] = current_route
+            user_payload["instruction"] += (
+                " The user is currently viewing this route; call get_route_details with this route_id "
+                "to get its distance, elevation, gradient distribution, markers and notes."
+            )
+
         user_message_content = json.dumps(user_payload, ensure_ascii=False)
 
         messages: list[dict[str, Any]] = [

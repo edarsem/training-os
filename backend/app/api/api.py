@@ -1,9 +1,9 @@
 import json
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
 from sqlalchemy.orm import Session
 from typing import List
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 from app.core.database import get_db
 from app.core.config import settings
 from app.core.training_load_defaults import (
@@ -14,6 +14,13 @@ from app.core.training_load_defaults import (
     TRAINING_LOAD_SOFTPLUS4_C,
     TRAINING_LOAD_SOFTPLUS4_D,
     softplus4_training_load_per_hour,
+)
+from app.core.gpx import (
+    GPXProcessingError,
+    compare_route_with_activity,
+    compute_slope_histogram,
+    interpolate_point_at_distance,
+    process_gpx,
 )
 from app.core.strava import StravaAPIError, StravaClient, StravaConfigError
 from app.llm.service import LLMConfigurationError, LLMProviderError, TrainingOSLLMService
@@ -464,6 +471,282 @@ def create_chat_message(conversation_id: int, payload: schemas.ChatMessageCreate
         raise HTTPException(status_code=400, detail="Invalid role. Use 'user' or 'assistant'.")
 
     return crud.create_chat_message(db, conversation_id, role=role, content=payload.content)
+
+# --- Routes ---
+def _route_detail_response(route: models.Route, markers: list[models.RouteMarker]) -> schemas.RouteDetailResponse:
+    track = json.loads(route.track_json)
+    histogram = compute_slope_histogram(track.get("slope_pct"), float(track.get("interval_m", 20.0)))
+    return schemas.RouteDetailResponse(
+        id=route.id,
+        name=route.name,
+        notes=route.notes,
+        source_filename=route.source_filename,
+        distance_km=route.distance_km,
+        elevation_gain_m=route.elevation_gain_m,
+        elevation_loss_m=route.elevation_loss_m,
+        min_elevation_m=route.min_elevation_m,
+        max_elevation_m=route.max_elevation_m,
+        has_elevation=bool(route.has_elevation),
+        session_id=route.session_id,
+        created_at=route.created_at,
+        updated_at=route.updated_at,
+        track=track,
+        markers=[schemas.RouteMarkerResponse.model_validate(m) for m in markers],
+        slope_histogram=histogram,
+    )
+
+
+@router.post("/routes/upload", response_model=schemas.RouteDetailResponse)
+async def upload_route(
+    file: UploadFile = File(...),
+    name: str | None = Form(default=None),
+    db: Session = Depends(get_db),
+):
+    """Upload a .gpx file and create a route with processed track data."""
+    filename = file.filename or "route.gpx"
+    if not filename.lower().endswith(".gpx"):
+        raise HTTPException(status_code=400, detail="File must be a .gpx file")
+
+    raw = await file.read()
+    try:
+        xml_text = raw.decode("utf-8-sig")
+    except UnicodeDecodeError:
+        raise HTTPException(status_code=400, detail="GPX file is not valid UTF-8 text")
+
+    try:
+        processed = process_gpx(xml_text)
+    except GPXProcessingError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    route_name = (name or "").strip() or processed["name"] or filename.rsplit(".", 1)[0]
+
+    route = crud.create_route(
+        db,
+        name=route_name,
+        source_filename=filename,
+        gpx_xml=xml_text,
+        track_json=json.dumps(processed["track"], ensure_ascii=False),
+        distance_km=processed["distance_km"],
+        elevation_gain_m=processed["elevation_gain_m"],
+        elevation_loss_m=processed["elevation_loss_m"],
+        min_elevation_m=processed["min_elevation_m"],
+        max_elevation_m=processed["max_elevation_m"],
+        has_elevation=processed["has_elevation"],
+    )
+    return _route_detail_response(route, [])
+
+
+@router.get("/routes", response_model=List[schemas.RouteSummaryResponse])
+def list_routes(db: Session = Depends(get_db)):
+    """List all routes (summaries only, no track data)."""
+    return crud.list_routes(db)
+
+
+@router.get("/routes/{route_id}", response_model=schemas.RouteDetailResponse)
+def get_route(route_id: int, db: Session = Depends(get_db)):
+    """Get a route with full track arrays, markers and slope histogram."""
+    route = crud.get_route(db, route_id)
+    if not route:
+        raise HTTPException(status_code=404, detail="Route not found")
+    return _route_detail_response(route, crud.list_route_markers(db, route_id))
+
+
+@router.put("/routes/{route_id}", response_model=schemas.RouteSummaryResponse)
+def update_route(route_id: int, payload: schemas.RouteUpdate, db: Session = Depends(get_db)):
+    """Update route name / notes / linked session."""
+    route = crud.update_route(db, route_id, payload)
+    if not route:
+        raise HTTPException(status_code=404, detail="Route not found")
+    return route
+
+
+@router.delete("/routes/{route_id}")
+def delete_route(route_id: int, db: Session = Depends(get_db)):
+    """Delete a route (markers cascade)."""
+    if not crud.delete_route(db, route_id):
+        raise HTTPException(status_code=404, detail="Route not found")
+    return {"ok": True}
+
+
+def _find_strava_activity_for_session(client: StravaClient, session: models.Session) -> dict | None:
+    """Find the Strava activity matching a session by external_id, falling back to nearest start time."""
+    if session.external_id and session.external_id.startswith("strava:"):
+        try:
+            activity_id = int(session.external_id.split(":", 1)[1])
+            return client.get_activity_by_id(activity_id).get("activity")
+        except (ValueError, StravaAPIError):
+            pass
+
+    base_dt = session.start_time or datetime.combine(session.date, datetime.min.time())
+    after_epoch = int(base_dt.timestamp()) - 2 * 86400
+    before_epoch = int(base_dt.timestamp()) + 2 * 86400
+    activities = client.find_activities_in_window(after_epoch=after_epoch, before_epoch=before_epoch, per_page=30)
+
+    external_id = (session.external_id or "").strip()
+    if external_id:
+        for activity in activities:
+            if str(activity.get("external_id") or "").strip() == external_id:
+                return activity
+
+    if session.start_time is not None:
+        session_start = session.start_time
+        if session_start.tzinfo is None:
+            session_start = session_start.replace(tzinfo=timezone.utc)
+        best = None
+        best_delta = None
+        for activity in activities:
+            start = _parse_strava_start_date(activity.get("start_date"))
+            if start is None:
+                continue
+            delta = abs((start - session_start).total_seconds())
+            if best_delta is None or delta < best_delta:
+                best, best_delta = activity, delta
+        if best is not None and best_delta is not None and best_delta < 3600:
+            return best
+    return None
+
+
+def _build_comparison_response(route: models.Route, session: models.Session) -> schemas.RouteComparisonResponse:
+    streams = json.loads(session.gps_stream_json)
+    track = json.loads(route.track_json)
+    try:
+        comparison = compare_route_with_activity(track, streams)
+    except GPXProcessingError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    name = None
+    if session.notes:
+        name = str(session.notes).splitlines()[0].strip() or None
+
+    return schemas.RouteComparisonResponse(
+        route_id=route.id,
+        session_id=session.id,
+        session_date=session.date,
+        session_type=session.type,
+        session_name=name,
+        **comparison,
+    )
+
+
+@router.post("/routes/{route_id}/match-session", response_model=schemas.RouteComparisonResponse)
+def match_route_session(route_id: int, payload: schemas.RouteMatchRequest, db: Session = Depends(get_db)):
+    """Link a route to a session: finds the Strava activity, fetches its GPS streams, and returns the comparison."""
+    route = crud.get_route(db, route_id)
+    if not route:
+        raise HTTPException(status_code=404, detail="Route not found")
+    session = crud.get_session_by_id(db, payload.session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail=f"Session {payload.session_id} not found")
+
+    if not session.gps_stream_json:
+        client = StravaClient()
+        try:
+            activity = _find_strava_activity_for_session(client, session)
+            if activity is None or activity.get("id") is None:
+                raise HTTPException(
+                    status_code=404,
+                    detail=f"Could not find a Strava activity matching session {session.id} ({session.date}).",
+                )
+            streams = client.get_activity_gps_streams(int(activity["id"]))
+        except StravaConfigError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except StravaAPIError as exc:
+            raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
+
+        if not streams.get("distance") or not streams.get("time"):
+            raise HTTPException(status_code=400, detail="This Strava activity has no distance/time streams (likely no GPS).")
+
+        session.gps_stream_json = json.dumps(streams, ensure_ascii=False)
+
+    route.session_id = session.id
+    db.commit()
+    db.refresh(route)
+    db.refresh(session)
+
+    return _build_comparison_response(route, session)
+
+
+@router.get("/routes/{route_id}/comparison", response_model=schemas.RouteComparisonResponse)
+def get_route_comparison(route_id: int, db: Session = Depends(get_db)):
+    """Get the planned-vs-actual comparison for a route linked to a session."""
+    route = crud.get_route(db, route_id)
+    if not route:
+        raise HTTPException(status_code=404, detail="Route not found")
+    if route.session_id is None:
+        raise HTTPException(status_code=404, detail="Route is not linked to a session")
+    session = crud.get_session_by_id(db, route.session_id)
+    if not session or not session.gps_stream_json:
+        raise HTTPException(status_code=404, detail="Linked session has no stored GPS streams")
+    return _build_comparison_response(route, session)
+
+
+@router.delete("/routes/{route_id}/match-session")
+def unlink_route_session(route_id: int, db: Session = Depends(get_db)):
+    """Unlink a route from its session (keeps the session's stored streams)."""
+    route = crud.get_route(db, route_id)
+    if not route:
+        raise HTTPException(status_code=404, detail="Route not found")
+    route.session_id = None
+    db.commit()
+    return {"ok": True}
+
+
+@router.post("/routes/{route_id}/markers", response_model=schemas.RouteMarkerResponse)
+def create_route_marker(route_id: int, payload: schemas.RouteMarkerCreate, db: Session = Depends(get_db)):
+    """Add a ravito or note marker anchored at distance_km; position is interpolated from the track."""
+    route = crud.get_route(db, route_id)
+    if not route:
+        raise HTTPException(status_code=404, detail="Route not found")
+
+    track = json.loads(route.track_json)
+    point = interpolate_point_at_distance(track, payload.distance_km)
+
+    return crud.create_route_marker(
+        db,
+        route_id=route_id,
+        kind=payload.kind,
+        distance_km=point["distance_km"],
+        lat=point["lat"],
+        lng=point["lng"],
+        elevation_m=point["elevation_m"],
+        label=payload.label,
+        note=payload.note,
+    )
+
+
+@router.put("/routes/{route_id}/markers/{marker_id}", response_model=schemas.RouteMarkerResponse)
+def update_route_marker(route_id: int, marker_id: int, payload: schemas.RouteMarkerUpdate, db: Session = Depends(get_db)):
+    """Update a marker; re-interpolates lat/lng/elevation when distance_km changes."""
+    route = crud.get_route(db, route_id)
+    if not route:
+        raise HTTPException(status_code=404, detail="Route not found")
+    marker = crud.get_route_marker(db, route_id, marker_id)
+    if not marker:
+        raise HTTPException(status_code=404, detail="Marker not found")
+
+    data = payload.model_dump(exclude_unset=True)
+    if "distance_km" in data and data["distance_km"] is not None:
+        track = json.loads(route.track_json)
+        point = interpolate_point_at_distance(track, data["distance_km"])
+        marker.distance_km = point["distance_km"]
+        marker.lat = point["lat"]
+        marker.lng = point["lng"]
+        marker.elevation_m = point["elevation_m"]
+        data.pop("distance_km")
+    for key, value in data.items():
+        setattr(marker, key, value)
+    db.commit()
+    db.refresh(marker)
+    return marker
+
+
+@router.delete("/routes/{route_id}/markers/{marker_id}")
+def delete_route_marker(route_id: int, marker_id: int, db: Session = Depends(get_db)):
+    """Delete a marker."""
+    if not crud.delete_route_marker(db, route_id, marker_id):
+        raise HTTPException(status_code=404, detail="Marker not found")
+    return {"ok": True}
+
 
 # --- Intelligence / Summaries ---
 @router.get("/summary/week/{year}/{week_number}", response_model=schemas.WeekSummaryResponse)

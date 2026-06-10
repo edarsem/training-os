@@ -187,8 +187,14 @@ class StravaClient:
         self,
         page: int,
         per_page: int,
+        after_epoch: int | None = None,
+        before_epoch: int | None = None,
     ) -> tuple[list[dict[str, Any]], StravaRateLimits]:
         url = f"{self.api_base_url}/athlete/activities?per_page={per_page}&page={page}"
+        if after_epoch is not None:
+            url += f"&after={int(after_epoch)}"
+        if before_epoch is not None:
+            url += f"&before={int(before_epoch)}"
         body, headers = self._request(
             method="GET",
             url=url,
@@ -419,6 +425,53 @@ class StravaClient:
                 "read_usage": rate_limits.read_usage,
             },
         }
+
+    def find_activities_in_window(
+        self,
+        *,
+        after_epoch: int,
+        before_epoch: int,
+        per_page: int = 30,
+    ) -> list[dict[str, Any]]:
+        """List activities whose start time falls in [after_epoch, before_epoch]."""
+        self._ensure_basic_config()
+        if self._is_access_token_expired():
+            self.refresh_access_token()
+
+        try:
+            activities, _ = self._fetch_activities_page(
+                page=1,
+                per_page=per_page,
+                after_epoch=after_epoch,
+                before_epoch=before_epoch,
+            )
+        except StravaAPIError as exc:
+            if exc.status_code != 401:
+                raise
+            self.refresh_access_token()
+            activities, _ = self._fetch_activities_page(
+                page=1,
+                per_page=per_page,
+                after_epoch=after_epoch,
+                before_epoch=before_epoch,
+            )
+        return activities
+
+    def get_activity_gps_streams(self, activity_id: int) -> dict[str, Any]:
+        """Fetch the streams needed for route comparison: time, distance, latlng, altitude, velocity, heartrate."""
+        self._ensure_basic_config()
+        if self._is_access_token_expired():
+            self.refresh_access_token()
+
+        keys = ["time", "distance", "latlng", "altitude", "velocity_smooth", "heartrate", "moving"]
+        try:
+            streams, _ = self._fetch_activity_streams(int(activity_id), keys=keys)
+        except StravaAPIError as exc:
+            if exc.status_code != 401:
+                raise
+            self.refresh_access_token()
+            streams, _ = self._fetch_activity_streams(int(activity_id), keys=keys)
+        return streams
 
     def get_activity_by_id(self, activity_id: int) -> dict[str, Any]:
         self._ensure_basic_config()

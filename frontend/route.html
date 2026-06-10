@@ -1,0 +1,304 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>🗺️ Routes — Training OS</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.x.x/dist/cdn.min.js"></script>
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+    <style>
+        [x-cloak] { display: none !important; }
+        .coach-markdown h1,
+        .coach-markdown h2,
+        .coach-markdown h3,
+        .coach-markdown h4 {
+            font-weight: 600;
+            color: #111827;
+            margin-top: 0.5rem;
+            margin-bottom: 0.35rem;
+        }
+        .coach-markdown p {
+            margin: 0.35rem 0;
+            white-space: pre-wrap;
+        }
+        .coach-markdown ul,
+        .coach-markdown ol {
+            margin: 0.35rem 0 0.35rem 1.1rem;
+        }
+        .coach-markdown table {
+            width: 100%;
+            border-collapse: collapse;
+            margin: 0.5rem 0;
+            font-size: 0.8rem;
+        }
+        .coach-markdown th,
+        .coach-markdown td {
+            border: 1px solid #e5e7eb;
+            padding: 0.35rem 0.45rem;
+            text-align: left;
+            vertical-align: top;
+        }
+        .coach-markdown th {
+            background: #f9fafb;
+            font-weight: 600;
+        }
+        .coach-markdown code {
+            background: #f3f4f6;
+            border-radius: 0.25rem;
+            padding: 0.05rem 0.3rem;
+            font-size: 0.75rem;
+        }
+        .marker-icon-ravito, .marker-icon-note {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 18px;
+            text-shadow: 0 0 3px #fff, 0 0 3px #fff;
+        }
+        #route-map { cursor: crosshair; }
+    </style>
+</head>
+<body class="bg-gray-50 text-gray-900 font-sans antialiased" x-data="routePage()">
+
+    <div class="max-w-7xl mx-auto px-8 py-6">
+        <!-- Header -->
+        <header class="flex justify-between items-center mb-8">
+            <h1 class="text-3xl font-bold text-gray-800">🗺️ Routes</h1>
+            <div class="flex items-center space-x-4">
+                <a href="index.html" class="px-3 py-1 bg-white border rounded shadow-sm hover:bg-gray-50">🗓️ Calendar</a>
+                <a href="analysis.html" class="px-3 py-1 bg-white border rounded shadow-sm hover:bg-gray-50">📈 Trends</a>
+                <a href="training-load.html" class="px-3 py-1 bg-white border rounded shadow-sm hover:bg-gray-50">📊 Training Load</a>
+                <a href="chat-history.html" class="px-3 py-1 bg-white border rounded shadow-sm hover:bg-gray-50">🗂️ Chat History</a>
+            </div>
+        </header>
+
+        <!-- Route selector + upload -->
+        <div class="bg-white p-4 rounded-lg shadow-sm border border-gray-200 mb-6 flex flex-wrap items-center gap-3">
+            <select x-model="selectedRouteId" @change="loadRoute(selectedRouteId)" class="rounded-md border-gray-300 bg-white shadow-sm border p-2 text-sm min-w-[16rem]">
+                <option value="">— Select a route —</option>
+                <template x-for="r in routes" :key="r.id">
+                    <option :value="r.id" x-text="`${r.name} (${(r.distance_km || 0).toFixed(1)} km${r.has_elevation ? ', D+ ' + Math.round(r.elevation_gain_m) + ' m' : ''})`"></option>
+                </template>
+            </select>
+            <label class="px-3 py-2 bg-blue-600 text-white rounded shadow-sm hover:bg-blue-700 text-sm font-medium cursor-pointer">
+                <span x-text="isUploading ? 'Uploading…' : '⬆ Upload GPX'"></span>
+                <input type="file" accept=".gpx" class="hidden" @change="uploadGpx($event)" :disabled="isUploading">
+            </label>
+            <button x-show="route" x-cloak @click="deleteRoute()" class="px-3 py-2 bg-white border border-red-300 text-red-600 rounded shadow-sm hover:bg-red-50 text-sm font-medium">Delete route</button>
+            <p x-show="uploadError" x-text="uploadError" class="text-sm text-red-600"></p>
+            <p x-show="route && !route.has_elevation" x-cloak class="text-sm text-amber-600">⚠️ This GPX has no elevation data — profile and gradients unavailable.</p>
+            <div x-show="route" x-cloak class="ml-auto text-sm text-gray-700 flex items-center gap-4">
+                <span>📏 <span x-text="route ? route.distance_km.toFixed(1) + ' km' : ''"></span></span>
+                <span x-show="route && route.has_elevation">⛰️ <span x-text="route && route.has_elevation ? '+' + Math.round(route.elevation_gain_m) + ' / -' + Math.round(route.elevation_loss_m) + ' m' : ''"></span></span>
+            </div>
+        </div>
+
+        <template x-if="route">
+            <div>
+                <!-- Marker mode buttons -->
+                <div class="flex items-center gap-2 mb-3">
+                    <button @click="toggleAddMode('ravito')" :class="addMode === 'ravito' ? 'bg-orange-500 text-white' : 'bg-white text-gray-700'" class="px-3 py-1.5 border rounded shadow-sm hover:opacity-90 text-sm font-medium">🥤 Add ravito</button>
+                    <button @click="toggleAddMode('note')" :class="addMode === 'note' ? 'bg-yellow-500 text-white' : 'bg-white text-gray-700'" class="px-3 py-1.5 border rounded shadow-sm hover:opacity-90 text-sm font-medium">📝 Add note</button>
+                    <span x-show="addMode" x-cloak class="text-sm text-gray-600">Click on the map or elevation profile to place the marker. Click the button again to cancel.</span>
+                </div>
+
+                <!-- Map -->
+                <div class="bg-white rounded-lg shadow-sm border border-gray-200 mb-6 overflow-hidden">
+                    <div id="route-map" class="h-[28rem] w-full z-0"></div>
+                </div>
+
+                <!-- Elevation profile -->
+                <div x-show="route.has_elevation" class="bg-white p-4 rounded-lg shadow-sm border border-gray-200 mb-6">
+                    <h3 class="text-lg font-semibold mb-2">⛰️ Elevation profile <span class="text-sm font-normal text-gray-500">(colored by gradient)</span></h3>
+                    <div class="h-64"><canvas id="elevation-chart"></canvas></div>
+                </div>
+
+                <!-- Gradient histogram -->
+                <div x-show="route.has_elevation" class="bg-white p-4 rounded-lg shadow-sm border border-gray-200 mb-6 lg:max-w-2xl">
+                    <h3 class="text-lg font-semibold mb-2">📊 Gradient distribution</h3>
+                    <div class="h-56"><canvas id="histogram-chart"></canvas></div>
+                </div>
+
+                <!-- Strava match / comparison -->
+                <div class="bg-white p-4 rounded-lg shadow-sm border border-gray-200 mb-6">
+                    <h3 class="text-lg font-semibold mb-3">🔗 Strava activity match</h3>
+
+                    <template x-if="!comparison">
+                        <div>
+                            <p class="text-sm text-gray-600 mb-3">Link this route to an activity to compare planned vs actual. Enter a session # directly, or pick a date to list that day's activities.</p>
+                            <div class="flex flex-wrap items-end gap-3">
+                                <div>
+                                    <label class="block text-xs font-medium text-gray-500">Session #</label>
+                                    <input type="number" min="1" x-model="matchSessionId" placeholder="e.g. 834" class="mt-1 w-28 rounded-md border-gray-300 shadow-sm border p-2 text-sm">
+                                </div>
+                                <span class="text-sm text-gray-400 pb-2">or</span>
+                                <div>
+                                    <label class="block text-xs font-medium text-gray-500">Activity date</label>
+                                    <input type="date" x-model="matchDate" @change="fetchSessionsForDate()" class="mt-1 rounded-md border-gray-300 shadow-sm border p-2 text-sm">
+                                </div>
+                                <select x-show="matchCandidates.length > 0" x-model="matchSessionId" class="rounded-md border-gray-300 bg-white shadow-sm border p-2 text-sm min-w-[16rem]">
+                                    <option value="">— Select activity —</option>
+                                    <template x-for="s in matchCandidates" :key="s.id">
+                                        <option :value="s.id" x-text="`#${s.id} — ${s.type}, ${s.distance_km ? s.distance_km.toFixed(1) + ' km' : Math.round(s.duration_minutes) + ' min'}${s.notes ? ' · ' + s.notes.split('\n')[0].slice(0, 40) : ''}`"></option>
+                                    </template>
+                                </select>
+                                <p x-show="matchDate && matchCandidates.length === 0" class="text-sm text-gray-500 pb-2">No activities on this date.</p>
+                                <button @click="matchSession()" :disabled="!matchSessionId || isMatching" class="bg-blue-600 text-white py-2 px-4 rounded hover:bg-blue-700 text-sm font-medium disabled:opacity-50">
+                                    <span x-text="isMatching ? 'Matching…' : 'Match'"></span>
+                                </button>
+                            </div>
+                            <p x-show="matchError" x-text="matchError" class="text-sm text-red-600 mt-2"></p>
+                        </div>
+                    </template>
+
+                    <template x-if="comparison">
+                        <div>
+                            <div class="flex flex-wrap items-center gap-4 text-sm text-gray-700 mb-3">
+                                <span>Linked to session <span class="font-semibold" x-text="'#' + comparison.session_id"></span>
+                                    <span x-text="comparison.session_date ? ' (' + comparison.session_date + ')' : ''"></span>
+                                    <span x-show="comparison.session_name" class="text-gray-500" x-text="comparison.session_name ? ' — ' + comparison.session_name : ''"></span>
+                                </span>
+                                <span>Planned <span class="font-semibold" x-text="comparison.route_distance_km + ' km'"></span> · Actual <span class="font-semibold" x-text="comparison.activity_distance_km + ' km'"></span></span>
+                                <button @click="unlinkSession()" class="ml-auto px-3 py-1 bg-white border border-red-300 text-red-600 rounded shadow-sm hover:bg-red-50 text-xs font-medium">Unlink</button>
+                            </div>
+                            <p x-show="comparison.distance_mismatch_warning" class="text-sm text-amber-600 mb-3">
+                                ⚠️ Distance differs by <span x-text="comparison.distance_mismatch_pct + '%'"></span> — the route and activity may not match; distance-based alignment can drift.
+                            </p>
+
+                            <div class="mb-4">
+                                <h4 class="text-sm font-semibold text-gray-700 mb-1">Pace & heart rate along the route</h4>
+                                <div class="h-56"><canvas id="comparison-chart"></canvas></div>
+                            </div>
+
+                            <div x-show="comparison.bracket_stats && comparison.bracket_stats.length > 0" class="lg:max-w-2xl">
+                                <h4 class="text-sm font-semibold text-gray-700 mb-1">Pace per gradient bracket</h4>
+                                <table class="w-full text-sm border-collapse">
+                                    <thead>
+                                        <tr class="text-left text-gray-500 border-b border-gray-200">
+                                            <th class="py-1 pr-3 font-medium">Gradient</th>
+                                            <th class="py-1 pr-3 font-medium">km</th>
+                                            <th class="py-1 pr-3 font-medium">Avg pace</th>
+                                            <th class="py-1 font-medium">Avg HR</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        <template x-for="b in comparison.bracket_stats" :key="b.label">
+                                            <tr class="border-b border-gray-100">
+                                                <td class="py-1 pr-3" x-text="b.label"></td>
+                                                <td class="py-1 pr-3" x-text="b.km"></td>
+                                                <td class="py-1 pr-3" x-text="formatPace(b.avg_pace_min_per_km)"></td>
+                                                <td class="py-1" x-text="b.avg_hr_bpm ? Math.round(b.avg_hr_bpm) + ' bpm' : '—'"></td>
+                                            </tr>
+                                        </template>
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+                    </template>
+                </div>
+
+                <div class="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-6">
+                    <!-- Marker list -->
+                    <div class="bg-white p-4 rounded-lg shadow-sm border border-gray-200">
+                        <h3 class="text-lg font-semibold mb-3">📍 Markers</h3>
+                        <p x-show="!route.markers || route.markers.length === 0" class="text-sm text-gray-500">No markers yet. Use the buttons above and click on the map or profile.</p>
+                        <div class="space-y-2 max-h-80 overflow-y-auto">
+                            <template x-for="m in sortedMarkers()" :key="m.id">
+                                <div class="border border-gray-200 rounded p-2 text-sm flex items-start gap-2 cursor-pointer hover:bg-gray-50" @click="panToMarker(m)">
+                                    <span x-text="m.kind === 'ravito' ? '🥤' : '📝'"></span>
+                                    <div class="flex-1">
+                                        <div>
+                                            <span class="font-semibold" x-text="`km ${Number(m.distance_km).toFixed(1)}`"></span>
+                                            <span x-show="m.elevation_m !== null" class="text-gray-500" x-text="m.elevation_m !== null ? ` · ${Math.round(m.elevation_m)} m` : ''"></span>
+                                            <span x-show="m.label" class="font-medium" x-text="m.label ? ' — ' + m.label : ''"></span>
+                                        </div>
+                                        <div x-show="m.note" class="text-gray-600 whitespace-pre-wrap" x-text="m.note"></div>
+                                    </div>
+                                    <button @click.stop="editMarker(m)" class="text-gray-400 hover:text-blue-600 text-xs">Edit</button>
+                                    <button @click.stop="deleteMarker(m)" class="text-gray-400 hover:text-red-600 text-xs">Delete</button>
+                                </div>
+                            </template>
+                        </div>
+                    </div>
+
+                    <!-- Global route notes -->
+                    <div class="bg-white p-4 rounded-lg shadow-sm border border-gray-200 flex flex-col">
+                        <h3 class="text-lg font-semibold mb-3">🗒️ Route notes <span class="text-xs font-normal text-gray-400" x-text="notesSaveState"></span></h3>
+                        <textarea x-model="routeNotes" @input="debouncedSaveNotes()" rows="8" placeholder="Strategy, gear, ravito plan, things to remember about this route..." class="flex-1 w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm border p-2"></textarea>
+                    </div>
+                </div>
+
+                <!-- Coach chat -->
+                <div class="bg-white p-5 rounded-lg shadow-sm border border-gray-200 mb-6">
+                    <h3 class="text-xl font-semibold mb-3">🧠 Coach <span class="text-sm font-normal text-gray-500">(sees this route)</span></h3>
+                    <div class="border border-gray-200 rounded-md p-3 bg-gray-50 h-72 overflow-y-auto space-y-3 resize-y" style="min-height: 10rem; max-height: 70vh;">
+                        <template x-for="(message, idx) in chatMessages" :key="idx">
+                            <div :class="message.role === 'user' ? 'flex justify-end' : 'flex justify-start'">
+                                <div :class="message.role === 'user'
+                                    ? 'max-w-[80%] rounded-2xl rounded-br-sm bg-blue-600 text-white px-3 py-2 text-sm whitespace-pre-wrap'
+                                    : 'max-w-[80%] rounded-2xl rounded-bl-sm bg-white border border-gray-200 text-gray-800 px-3 py-2 text-sm'">
+                                    <template x-if="message.role === 'user'">
+                                        <div class="leading-snug whitespace-pre-line break-words" x-text="message.content"></div>
+                                    </template>
+                                    <template x-if="message.role !== 'user'">
+                                        <div class="coach-markdown" x-html="renderCoachMarkdown(message.content)"></div>
+                                    </template>
+                                </div>
+                            </div>
+                        </template>
+                    </div>
+                    <p x-show="chatError" x-text="chatError" class="text-sm text-red-600 mt-2"></p>
+                    <form @submit.prevent="sendChatMessage()" class="mt-3 flex items-center gap-2">
+                        <textarea
+                            x-model="chatInput"
+                            @keydown.enter="if (!$event.shiftKey) { $event.preventDefault(); sendChatMessage(); }"
+                            :disabled="isChatLoading"
+                            placeholder="Ask the coach about this route (pacing, hardest sections, ravito strategy)..."
+                            rows="2"
+                            class="flex-1 rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm border p-2 resize-y"
+                        ></textarea>
+                        <button type="submit" :disabled="isChatLoading || !chatInput.trim()" class="bg-blue-600 text-white py-2 px-4 rounded hover:bg-blue-700 text-sm font-medium disabled:opacity-50">
+                            <span x-text="isChatLoading ? 'Sending…' : 'Send'"></span>
+                        </button>
+                    </form>
+                </div>
+            </div>
+        </template>
+
+        <p x-show="!route && routes.length === 0" class="text-gray-500 text-sm">No routes yet — upload a .gpx file to get started.</p>
+
+        <!-- Marker form modal -->
+        <div x-show="isMarkerModalOpen" class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-[1000]" x-cloak>
+            <div class="bg-white rounded-lg p-6 w-full max-w-md" @click.away="isMarkerModalOpen = false">
+                <h3 class="text-lg font-bold mb-4" x-text="(markerForm.id ? 'Edit ' : 'Add ') + (markerForm.kind === 'ravito' ? '🥤 Ravito' : '📝 Note')"></h3>
+                <form @submit.prevent="saveMarker()" class="space-y-4">
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700">Distance (km)</label>
+                        <input type="number" step="0.1" min="0" x-model="markerForm.distance_km" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm border p-2 sm:text-sm" required>
+                    </div>
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700">Label</label>
+                        <input type="text" x-model="markerForm.label" placeholder="e.g. Col de la Madeleine" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm border p-2 sm:text-sm">
+                    </div>
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700">Note</label>
+                        <textarea x-model="markerForm.note" rows="3" placeholder="e.g. ravito, ate 2 gels, felt strong" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm border p-2 sm:text-sm"></textarea>
+                    </div>
+                    <div class="flex justify-end space-x-3 pt-2">
+                        <button type="button" @click="isMarkerModalOpen = false" class="bg-white border border-gray-300 text-gray-700 py-2 px-4 rounded hover:bg-gray-50 text-sm font-medium">Cancel</button>
+                        <button type="submit" class="bg-blue-600 text-white py-2 px-4 rounded hover:bg-blue-700 text-sm font-medium">Save</button>
+                    </div>
+                </form>
+            </div>
+        </div>
+
+    </div>
+
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/dompurify@3.2.6/dist/purify.min.js"></script>
+    <script src="route.js"></script>
+</body>
+</html>

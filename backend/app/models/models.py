@@ -25,6 +25,7 @@ class Session(Base):
     training_load = Column(Float, nullable=True)
     training_load_elapsed = Column(Float, nullable=True)
     hr_stream_json = Column(Text, nullable=True)
+    gps_stream_json = Column(Text, nullable=True)
     notes = Column(Text, nullable=True)
     
     created_at = Column(DateTime(timezone=True), server_default=func.now())
@@ -80,6 +81,52 @@ class WeeklyPlan(Base):
     
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
+
+
+class Route(Base):
+    __tablename__ = "routes"
+
+    id = Column(Integer, primary_key=True, index=True)
+    name = Column(String, nullable=False)
+    notes = Column(Text, nullable=True)
+    source_filename = Column(String, nullable=True)
+    gpx_xml = Column(Text, nullable=True)
+    track_json = Column(Text, nullable=False)
+    distance_km = Column(Float, nullable=True)
+    elevation_gain_m = Column(Float, nullable=True)
+    elevation_loss_m = Column(Float, nullable=True)
+    min_elevation_m = Column(Float, nullable=True)
+    max_elevation_m = Column(Float, nullable=True)
+    has_elevation = Column(Boolean, nullable=False, default=False)
+    session_id = Column(Integer, ForeignKey("sessions.id", ondelete="SET NULL"), nullable=True)
+
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), onupdate=func.now())
+
+    markers = relationship(
+        "RouteMarker",
+        back_populates="route",
+        cascade="all, delete-orphan",
+    )
+
+
+class RouteMarker(Base):
+    __tablename__ = "route_markers"
+
+    id = Column(Integer, primary_key=True, index=True)
+    route_id = Column(Integer, ForeignKey("routes.id", ondelete="CASCADE"), index=True, nullable=False)
+    kind = Column(String, nullable=False)  # ravito | note
+    distance_km = Column(Float, nullable=False)
+    lat = Column(Float, nullable=True)
+    lng = Column(Float, nullable=True)
+    elevation_m = Column(Float, nullable=True)
+    label = Column(String, nullable=True)
+    note = Column(Text, nullable=True)
+
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), onupdate=func.now())
+
+    route = relationship("Route", back_populates="markers")
 
 
 class ChatConversation(Base):

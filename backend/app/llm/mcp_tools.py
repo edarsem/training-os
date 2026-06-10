@@ -1259,6 +1259,34 @@ def get_recent_context_tool(
     return {"text": "\n".join(lines)}
 
 
+def get_route_details_tool(db: DBSession, *, route_id: int) -> dict[str, Any]:
+    import json as _json
+
+    from app.core.gpx import build_route_text_summary, compute_slope_histogram
+
+    route = crud.get_route(db, route_id)
+    if not route:
+        return {"error": "route_not_found", "route_id": route_id}
+
+    track = _json.loads(route.track_json)
+    histogram = compute_slope_histogram(track.get("slope_pct"), float(track.get("interval_m", 20.0)))
+    markers = crud.list_route_markers(db, route_id)
+    return {"text": build_route_text_summary(route, markers, histogram)}
+
+
+def list_routes_tool(db: DBSession) -> dict[str, Any]:
+    routes = crud.list_routes(db)
+    if not routes:
+        return {"text": "No routes saved."}
+    lines = ["Saved routes:"]
+    for route in routes:
+        line = f"- id {route.id}: {route.name}, {_fmt_distance_km(route.distance_km)} km"
+        if route.has_elevation and route.elevation_gain_m is not None:
+            line += f", D+ {_fmt_elevation_m(route.elevation_gain_m)} m"
+        lines.append(line)
+    return {"text": "\n".join(lines)}
+
+
 def get_mcp_tools_schema() -> list[dict[str, Any]]:
     return [
         {
@@ -1392,6 +1420,34 @@ def get_mcp_tools_schema() -> list[dict[str, Any]]:
             "function": {
                 "name": "get_recent_context",
                 "description": "Get recent context: week plan, shape, sessions of the last few days to estimate current fatigue or freshness.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {},
+                    "required": [],
+                    "additionalProperties": False,
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "get_route_details",
+                "description": "Get details for one saved route by route id: distance, elevation gain/loss, gradient distribution per slope bracket, ravito/note markers, and route notes.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "route_id": {"type": "integer"},
+                    },
+                    "required": ["route_id"],
+                    "additionalProperties": False,
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "list_routes",
+                "description": "List all saved routes (one line per route with id, name, distance, elevation gain).",
                 "parameters": {
                     "type": "object",
                     "properties": {},
@@ -1566,6 +1622,12 @@ def execute_mcp_tool(
             now_iso_date=str(now_iso_date) if now_iso_date else None,
             output_mode="text",
         )
+
+    if name == "get_route_details":
+        return get_route_details_tool(db, route_id=int(arguments["route_id"]))
+
+    if name == "list_routes":
+        return list_routes_tool(db)
 
     if name == "submit_final_answer":
         return {

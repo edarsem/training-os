@@ -222,6 +222,90 @@ class TrainingLoadRecomputeResponse(BaseModel):
     current_acwr: Optional[float] = None
 
 
+# --- Route Schemas ---
+class RouteMarkerCreate(BaseModel):
+    kind: Literal["ravito", "note"]
+    distance_km: float = Field(..., ge=0)
+    label: Optional[str] = None
+    note: Optional[str] = None
+
+
+class RouteMarkerUpdate(BaseModel):
+    kind: Optional[Literal["ravito", "note"]] = None
+    distance_km: Optional[float] = Field(None, ge=0)
+    label: Optional[str] = None
+    note: Optional[str] = None
+
+
+class RouteMarkerResponse(BaseModel):
+    id: int
+    route_id: int
+    kind: str
+    distance_km: float
+    lat: Optional[float] = None
+    lng: Optional[float] = None
+    elevation_m: Optional[float] = None
+    label: Optional[str] = None
+    note: Optional[str] = None
+    created_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
+
+    class Config:
+        from_attributes = True
+
+
+class RouteUpdate(BaseModel):
+    name: Optional[str] = None
+    notes: Optional[str] = None
+    session_id: Optional[int] = None
+
+
+class RouteSummaryResponse(BaseModel):
+    id: int
+    name: str
+    notes: Optional[str] = None
+    source_filename: Optional[str] = None
+    distance_km: Optional[float] = None
+    elevation_gain_m: Optional[float] = None
+    elevation_loss_m: Optional[float] = None
+    min_elevation_m: Optional[float] = None
+    max_elevation_m: Optional[float] = None
+    has_elevation: bool = False
+    session_id: Optional[int] = None
+    created_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
+
+    class Config:
+        from_attributes = True
+
+
+class RouteMatchRequest(BaseModel):
+    session_id: int
+
+
+class RouteComparisonResponse(BaseModel):
+    route_id: int
+    session_id: int
+    session_date: Optional[date] = None
+    session_type: Optional[str] = None
+    session_name: Optional[str] = None
+    route_distance_km: float
+    activity_distance_km: float
+    distance_mismatch_pct: float
+    distance_mismatch_warning: bool
+    pace_min_per_km: List[Optional[float]] = Field(default_factory=list)
+    hr_bpm: List[Optional[float]] = Field(default_factory=list)
+    km_splits: List[dict[str, Any]] = Field(default_factory=list)
+    bracket_stats: List[dict[str, Any]] = Field(default_factory=list)
+    actual_latlng: List[List[float]] = Field(default_factory=list)
+
+
+class RouteDetailResponse(RouteSummaryResponse):
+    track: dict[str, Any] = Field(default_factory=dict)
+    markers: List[RouteMarkerResponse] = Field(default_factory=list)
+    slope_histogram: List[dict[str, Any]] = Field(default_factory=list)
+
+
 class LLMContextLevel(str, Enum):
     session = "session"
     day = "day"
@@ -264,6 +348,8 @@ class LLMInterpretRequest(BaseModel):
     include_tool_trace_in_history: bool = True
 
     tool_hints: List[str] = Field(default_factory=list)
+
+    route_id: Optional[int] = None
 
 
 class LLMAuditResponse(BaseModel):

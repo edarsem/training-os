@@ -197,6 +197,121 @@ def upsert_weekly_plan(db: DBSession, plan: schemas.WeeklyPlanCreate) -> models.
     return db_plan
 
 
+# --- Routes ---
+def list_routes(db: DBSession) -> List[models.Route]:
+    return db.query(models.Route).order_by(models.Route.created_at.desc(), models.Route.id.desc()).all()
+
+
+def get_route(db: DBSession, route_id: int) -> Optional[models.Route]:
+    return db.query(models.Route).filter(models.Route.id == route_id).first()
+
+
+def create_route(
+    db: DBSession,
+    *,
+    name: str,
+    source_filename: Optional[str],
+    gpx_xml: str,
+    track_json: str,
+    distance_km: Optional[float],
+    elevation_gain_m: Optional[float],
+    elevation_loss_m: Optional[float],
+    min_elevation_m: Optional[float],
+    max_elevation_m: Optional[float],
+    has_elevation: bool,
+) -> models.Route:
+    route = models.Route(
+        name=name,
+        source_filename=source_filename,
+        gpx_xml=gpx_xml,
+        track_json=track_json,
+        distance_km=distance_km,
+        elevation_gain_m=elevation_gain_m,
+        elevation_loss_m=elevation_loss_m,
+        min_elevation_m=min_elevation_m,
+        max_elevation_m=max_elevation_m,
+        has_elevation=has_elevation,
+    )
+    db.add(route)
+    db.commit()
+    db.refresh(route)
+    return route
+
+
+def update_route(db: DBSession, route_id: int, update: schemas.RouteUpdate) -> Optional[models.Route]:
+    route = get_route(db, route_id)
+    if not route:
+        return None
+    for key, value in update.model_dump(exclude_unset=True).items():
+        setattr(route, key, value)
+    db.commit()
+    db.refresh(route)
+    return route
+
+
+def delete_route(db: DBSession, route_id: int) -> bool:
+    route = get_route(db, route_id)
+    if not route:
+        return False
+    db.delete(route)
+    db.commit()
+    return True
+
+
+def list_route_markers(db: DBSession, route_id: int) -> List[models.RouteMarker]:
+    return (
+        db.query(models.RouteMarker)
+        .filter(models.RouteMarker.route_id == route_id)
+        .order_by(models.RouteMarker.distance_km.asc(), models.RouteMarker.id.asc())
+        .all()
+    )
+
+
+def get_route_marker(db: DBSession, route_id: int, marker_id: int) -> Optional[models.RouteMarker]:
+    return (
+        db.query(models.RouteMarker)
+        .filter(models.RouteMarker.route_id == route_id, models.RouteMarker.id == marker_id)
+        .first()
+    )
+
+
+def create_route_marker(
+    db: DBSession,
+    *,
+    route_id: int,
+    kind: str,
+    distance_km: float,
+    lat: Optional[float],
+    lng: Optional[float],
+    elevation_m: Optional[float],
+    label: Optional[str],
+    note: Optional[str],
+) -> models.RouteMarker:
+    marker = models.RouteMarker(
+        route_id=route_id,
+        kind=kind,
+        distance_km=distance_km,
+        lat=lat,
+        lng=lng,
+        elevation_m=elevation_m,
+        label=label,
+        note=note,
+    )
+    db.add(marker)
+    db.commit()
+    db.refresh(marker)
+    return marker
+
+
+def delete_route_marker(db: DBSession, route_id: int, marker_id: int) -> bool:
+    marker = get_route_marker(db, route_id, marker_id)
+    if not marker:
+        return False
+    db.delete(marker)
+    db.commit()
+    return True
+
+
 # --- Chat Conversations ---
 def list_chat_conversations(db: DBSession, limit: int = 100) -> List[models.ChatConversation]:
     return db.query(models.ChatConversation).order_by(models.ChatConversation.updated_at.desc(), models.ChatConversation.id.desc()).limit(limit).all()
