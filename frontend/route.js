@@ -11,6 +11,7 @@ let highlightLayer = null;
 let elevationChart = null;
 let histogramChart = null;
 let currentTrack = null;
+let plannedTraceVisible = true;
 
 const SLOPE_COLORS = [
     { max: -40, color: '#172554' },
@@ -51,17 +52,18 @@ function destroyVisuals() {
     if (elevationChart) { elevationChart.destroy(); elevationChart = null; }
     if (histogramChart) { histogramChart.destroy(); histogramChart = null; }
     currentTrack = null;
+    plannedTraceVisible = true;
 }
 
 function clearBracketHighlight() {
     if (highlightLayer && map) { map.removeLayer(highlightLayer); highlightLayer = null; }
-    if (trackPolyline) trackPolyline.setStyle({ opacity: 1 });
+    if (trackPolyline) trackPolyline.setStyle({ opacity: plannedTraceVisible ? 1 : 0 });
 }
 
 function highlightBracketOnMap(bracket) {
     if (!map || !currentTrack || !currentTrack.slope_pct) return;
     clearBracketHighlight();
-    trackPolyline.setStyle({ opacity: 0.25 });
+    if (plannedTraceVisible) trackPolyline.setStyle({ opacity: 0.25 });
 
     const lo = bracket.min_pct;
     const hi = bracket.max_pct;
@@ -160,8 +162,24 @@ document.addEventListener('alpine:init', () => {
         chatError: '',
         isChatLoading: false,
         markdownConfigured: false,
+        chatModelOptions: [
+            'mistral-small-latest',
+            'mistral-medium-latest',
+            'mistral-large-latest',
+            'gemini-3.1-flash-lite-preview',
+            'gemini-3.1-pro-preview',
+            'gemini-3.1-pro-preview-customtools',
+        ],
+        selectedChatModel: 'mistral-small-latest',
+
+        showPlannedTrace: true,
+        showActualTrace: true,
 
         async init() {
+            const stored = localStorage.getItem('training_os_chat_model');
+            if (stored && this.chatModelOptions.includes(stored)) {
+                this.selectedChatModel = stored;
+            }
             await this.fetchRoutes();
             if (this.routes.length > 0) {
                 this.selectedRouteId = String(this.routes[0].id);
@@ -192,6 +210,8 @@ document.addEventListener('alpine:init', () => {
             this.matchError = '';
             this.showPaceOverlay = false;
             this.showHrOverlay = false;
+            this.showPlannedTrace = true;
+            this.showActualTrace = true;
             if (!routeId) return;
             try {
                 const res = await fetch(`${API_BASE}/routes/${routeId}`);
@@ -244,7 +264,11 @@ document.addEventListener('alpine:init', () => {
             if (this.showNewFromActivity && this.raceSessions.length === 0) {
                 try {
                     const res = await fetch(`${API_BASE}/sessions/races`);
-                    if (res.ok) this.raceSessions = (await res.json()).reverse();
+                    if (res.ok) {
+                        // hide races that already have an analysis route
+                        const linked = new Set(this.routes.map((r) => r.session_id).filter((id) => id !== null));
+                        this.raceSessions = (await res.json()).reverse().filter((s) => !linked.has(s.id));
+                    }
                 } catch (e) {
                     console.error('Failed to fetch race sessions', e);
                 }
@@ -689,13 +713,26 @@ document.addEventListener('alpine:init', () => {
             }
         },
 
+        hasPlannedTrace() {
+            // routes created from a Strava activity have no GPX file: their track IS the actual trace
+            return !!(this.route && this.route.source_filename);
+        },
+
         renderActualPolyline() {
             if (!map || !this.comparison) return;
             if (actualPolyline) { map.removeLayer(actualPolyline); actualPolyline = null; }
+            if (!this.hasPlannedTrace()) return; // planned and actual would be the same trace
             const latlng = this.comparison.actual_latlng || [];
             if (latlng.length < 2) return;
             actualPolyline = L.polyline(latlng, { color: '#dc2626', weight: 3, dashArray: '6 6', opacity: 0.8 })
                 .bindTooltip('Actual activity').addTo(map);
+            this.updateTraceVisibility();
+        },
+
+        updateTraceVisibility() {
+            plannedTraceVisible = !!this.showPlannedTrace;
+            if (trackPolyline) trackPolyline.setStyle({ opacity: plannedTraceVisible ? 1 : 0 });
+            if (actualPolyline) actualPolyline.setStyle({ opacity: this.showActualTrace ? 0.8 : 0 });
         },
 
         updateOverlayData() {
@@ -718,9 +755,32 @@ document.addEventListener('alpine:init', () => {
 
         formatPace(pace) {
             if (pace === null || pace === undefined || !isFinite(pace)) return '—';
-            const minutes = Math.floor(pace);
-            const seconds = Math.round((pace - minutes) * 60);
-            return `${minutes}'${String(seconds).padStart(2, '0')}"/km`;
+            let minutes = Math.floor(pace);
+            let seconds = Math.round((pace - minutes) * 60);
+            if (seconds === 60) { minutes += 1; seconds = 0; }
+            return `${minutes}'${String(seconds).padStart(2, '0')}"`;
+        },
+
+        formatSplitTime(seconds) {
+            if (seconds === null || seconds === undefined || !isFinite(seconds)) return '—';
+            const total = Math.round(seconds);
+            const h = Math.floor(total / 3600);
+            const m = Math.floor((total % 3600) / 60);
+            const s = total % 60;
+            return h > 0
+                ? `${h}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`
+                : `${m}:${String(s).padStart(2, '0')}`;
+        },
+
+        getProviderForModel(modelName) {
+            const normalized = String(modelName || '').trim().toLowerCase();
+            return normalized.startsWith('gemini') ? 'google' : 'mistral';
+        },
+
+        setChatModel(modelName) {
+            if (!this.chatModelOptions.includes(modelName)) return;
+            this.selectedChatModel = modelName;
+            localStorage.setItem('training_os_chat_model', modelName);
         },
 
         // --- Global notes ---
@@ -756,9 +816,14 @@ document.addEventListener('alpine:init', () => {
             this.isChatLoading = true;
 
             try {
+                const effectiveModel = this.chatModelOptions.includes(this.selectedChatModel)
+                    ? this.selectedChatModel
+                    : this.chatModelOptions[0];
                 const payload = {
                     query: text,
                     route_id: this.route.id,
+                    provider: this.getProviderForModel(effectiveModel),
+                    model: effectiveModel,
                     deterministic: true,
                     include_context_in_response: false,
                     conversation_history: this.chatMessages

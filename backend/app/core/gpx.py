@@ -369,6 +369,7 @@ def compare_route_with_activity(track: dict[str, Any], streams: dict[str, Any]) 
         seg_pace = smoothed
 
     # per-km splits
+    ele_m = track.get("ele_m")
     splits: list[dict[str, Any]] = []
     km = 1
     prev_time = grid_time[0]
@@ -377,14 +378,28 @@ def compare_route_with_activity(track: dict[str, Any], streams: dict[str, Any]) 
         if route_dist_km[i] >= km or i == n - 1:
             t = grid_time[i]
             if prev_time is not None and t is not None and route_dist_km[i] > route_dist_km[prev_idx]:
-                dur_min = (t - prev_time) / 60.0
+                dur_s = t - prev_time
                 d_km = route_dist_km[i] - route_dist_km[prev_idx]
                 hr_window = [h for h in grid_hr[prev_idx:i + 1] if h is not None]
+                gain = loss = None
+                if ele_m:
+                    gain = loss = 0.0
+                    for k in range(prev_idx + 1, i + 1):
+                        delta = ele_m[k] - ele_m[k - 1]
+                        if delta > 0:
+                            gain += delta
+                        else:
+                            loss -= delta
+                    gain = round(gain)
+                    loss = round(loss)
                 splits.append(
                     {
                         "km": km if route_dist_km[i] >= km else round(route_dist_km[i], 2),
-                        "pace_min_per_km": round(dur_min / d_km, 2),
+                        "duration_s": round(dur_s),
+                        "pace_min_per_km": round(dur_s / 60.0 / d_km, 2),
                         "avg_hr_bpm": round(sum(hr_window) / len(hr_window), 0) if hr_window else None,
+                        "d_plus_m": gain,
+                        "d_minus_m": loss,
                     }
                 )
             prev_time = grid_time[i]

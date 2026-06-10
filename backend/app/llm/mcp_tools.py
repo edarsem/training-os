@@ -1259,10 +1259,36 @@ def get_recent_context_tool(
     return {"text": "\n".join(lines)}
 
 
+def _fmt_split_time(seconds: int | float | None) -> str:
+    if seconds is None:
+        return "n/a"
+    total = int(round(float(seconds)))
+    minutes, secs = divmod(total, 60)
+    hours, minutes = divmod(minutes, 60)
+    if hours:
+        return f"{hours}:{minutes:02d}:{secs:02d}"
+    return f"{minutes}:{secs:02d}"
+
+
+def _fmt_pace(pace_min_per_km: float | None) -> str:
+    if pace_min_per_km is None:
+        return "n/a"
+    minutes = int(pace_min_per_km)
+    seconds = int(round((pace_min_per_km - minutes) * 60))
+    if seconds == 60:
+        minutes, seconds = minutes + 1, 0
+    return f"{minutes}'{seconds:02d}\"/km"
+
+
 def get_route_details_tool(db: DBSession, *, route_id: int) -> dict[str, Any]:
     import json as _json
 
-    from app.core.gpx import build_route_text_summary, compute_slope_histogram
+    from app.core.gpx import (
+        GPXProcessingError,
+        build_route_text_summary,
+        compare_route_with_activity,
+        compute_slope_histogram,
+    )
 
     route = crud.get_route(db, route_id)
     if not route:
@@ -1271,7 +1297,37 @@ def get_route_details_tool(db: DBSession, *, route_id: int) -> dict[str, Any]:
     track = _json.loads(route.track_json)
     histogram = compute_slope_histogram(track.get("slope_pct"), float(track.get("interval_m", 20.0)))
     markers = crud.list_route_markers(db, route_id)
-    return {"text": build_route_text_summary(route, markers, histogram)}
+    lines = [build_route_text_summary(route, markers, histogram)]
+
+    # actual performance when the route is linked to an activity with GPS streams
+    session = crud.get_session_by_id(db, route.session_id) if route.session_id else None
+    if session and session.gps_stream_json:
+        try:
+            comparison = compare_route_with_activity(track, _json.loads(session.gps_stream_json))
+        except (GPXProcessingError, ValueError):
+            comparison = None
+        if comparison:
+            lines.append(
+                f"\nActual performance (session {session.id}, {session.date}, "
+                f"activity {comparison['activity_distance_km']} km"
+                + (f", distance mismatch {comparison['distance_mismatch_pct']}% — alignment approximate" if comparison["distance_mismatch_warning"] else "")
+                + "):"
+            )
+            brackets = [b for b in comparison.get("bracket_stats") or [] if b.get("avg_pace_min_per_km") is not None]
+            if brackets:
+                lines.append("Pace per gradient bracket:")
+                for b in brackets:
+                    hr_text = f", HR {b['avg_hr_bpm']:.0f} bpm" if b.get("avg_hr_bpm") is not None else ""
+                    lines.append(f"  {b['label']}: {b['km']} km, avg {_fmt_pace(b['avg_pace_min_per_km'])}{hr_text}")
+            splits = comparison.get("km_splits") or []
+            if splits:
+                lines.append("Per-km splits (km: time, HR, D+/D-):")
+                for s in splits:
+                    hr_text = f", {s['avg_hr_bpm']:.0f} bpm" if s.get("avg_hr_bpm") is not None else ""
+                    dplus = f", +{s['d_plus_m']}m/-{s['d_minus_m']}m" if s.get("d_plus_m") is not None else ""
+                    lines.append(f"  km {s['km']}: {_fmt_split_time(s.get('duration_s'))}{hr_text}{dplus}")
+
+    return {"text": "\n".join(lines)}
 
 
 def list_routes_tool(db: DBSession) -> dict[str, Any]:
@@ -1432,7 +1488,7 @@ def get_mcp_tools_schema() -> list[dict[str, Any]]:
             "type": "function",
             "function": {
                 "name": "get_route_details",
-                "description": "Get details for one saved route by route id: distance, elevation gain/loss, gradient distribution per slope bracket, ravito/note markers, and route notes.",
+                "description": "Get details for one saved route by route id: distance, elevation gain/loss, gradient distribution per slope bracket, ravito/note markers, route notes, and — when the route is linked to a completed activity — actual performance (pace/HR per gradient bracket and per-km splits with time, HR, D+/D-).",
                 "parameters": {
                     "type": "object",
                     "properties": {

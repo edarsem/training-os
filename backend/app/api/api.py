@@ -669,6 +669,13 @@ def create_route_from_session(payload: schemas.RouteMatchRequest, db: Session = 
     if not session:
         raise HTTPException(status_code=404, detail=f"Session {payload.session_id} not found")
 
+    existing = db.query(models.Route).filter(models.Route.session_id == session.id, models.Route.gpx_xml.is_(None)).first()
+    if existing:
+        raise HTTPException(
+            status_code=409,
+            detail=f"A route already exists for this activity: \"{existing.name}\" (route {existing.id}).",
+        )
+
     activity_detail = _ensure_session_gps_streams(session)
     if activity_detail is None:
         # streams were already stored; still try to get the activity description (non-fatal)
