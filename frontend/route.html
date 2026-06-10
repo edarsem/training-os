@@ -108,7 +108,20 @@
                         </template>
                     </select>
                 </div>
-                <span class="text-sm text-gray-400 pb-2">or any session #</span>
+                <span class="text-sm text-gray-400 pb-2">or by date</span>
+                <div>
+                    <label class="block text-xs font-medium text-gray-500">Date</label>
+                    <input type="date" x-model="newFromDate" @change="fetchSessionsForNewFromDate()" class="mt-1 rounded-md border-gray-300 shadow-sm border p-2 text-sm">
+                </div>
+                <span x-show="newFromCandidates === null" class="text-sm text-gray-400 pb-2">Loading…</span>
+                <select x-show="Array.isArray(newFromCandidates) && newFromCandidates.length > 0" x-model="newFromSessionId" class="rounded-md border-gray-300 bg-white shadow-sm border p-2 text-sm min-w-[16rem]">
+                    <option value="">— Select activity —</option>
+                    <template x-for="s in (newFromCandidates || [])" :key="s.id">
+                        <option :value="s.id" x-text="`${s.date} — #${s.id} ${s.type}${s.distance_km ? ', ' + s.distance_km.toFixed(1) + ' km' : ''}${s.notes ? ' · ' + s.notes.split('\n')[0].slice(0, 40) : ''}`"></option>
+                    </template>
+                </select>
+                <p x-show="newFromDate && Array.isArray(newFromCandidates) && newFromCandidates.length === 0" class="text-sm text-gray-500 pb-2">No activities found ±1 day around this date.</p>
+                <span class="text-sm text-gray-400 pb-2">or session #</span>
                 <div>
                     <input type="number" min="1" x-model="newFromSessionId" placeholder="e.g. 834" class="mt-1 w-28 rounded-md border-gray-300 shadow-sm border p-2 text-sm">
                 </div>
@@ -362,10 +375,10 @@
         <div x-show="isMarkerModalOpen" class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-[1000]" x-cloak>
             <div class="bg-white rounded-lg p-6 w-full max-w-md" @click.away="isMarkerModalOpen = false">
                 <h3 class="text-lg font-bold mb-4" x-text="(markerForm.id ? 'Edit ' : 'Add ') + (markerForm.kind === 'ravito' ? '🥤 Ravito' : '📝 Note')"></h3>
-                <form @submit.prevent="saveMarker()" class="space-y-4">
+                <form @submit.prevent="saveMarker()" @keydown.meta.enter.prevent="saveMarker()" @keydown.ctrl.enter.prevent="saveMarker()" class="space-y-4">
                     <div>
                         <label class="block text-sm font-medium text-gray-700">Distance (km)</label>
-                        <input type="number" step="0.1" min="0" x-model="markerForm.distance_km" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm border p-2 sm:text-sm" required>
+                        <input type="number" step="any" min="0" x-model="markerForm.distance_km" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm border p-2 sm:text-sm" required>
                     </div>
                     <div>
                         <label class="block text-sm font-medium text-gray-700">Label</label>

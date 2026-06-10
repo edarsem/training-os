@@ -219,15 +219,15 @@ def _build_track(points: list[tuple[float, float, float | None]], cum_m: list[fl
 
         gain = loss = 0.0
         for i in range(1, n):
-            delta = ele_smooth[i] - ele_smooth[i - 1]
+            delta = ele[i] - ele[i - 1]
             if delta > 0:
                 gain += delta
             else:
                 loss -= delta
         gain = round(gain, 1)
         loss = round(loss, 1)
-        min_ele = round(min(ele_smooth), 1)
-        max_ele = round(max(ele_smooth), 1)
+        min_ele = round(min(ele), 1)
+        max_ele = round(max(ele), 1)
         ele_smooth = [round(v, 1) for v in ele_smooth]
 
     track = {
@@ -237,6 +237,7 @@ def _build_track(points: list[tuple[float, float, float | None]], cum_m: list[fl
         "lng": lng,
         "dist_km": dist_km,
         "ele_m": ele_smooth,
+        "ele_raw_m": [round(v, 1) for v in ele] if has_elevation else None,
         "slope_pct": slope_pct,
     }
 
@@ -385,7 +386,8 @@ def compare_route_with_activity(track: dict[str, Any], streams: dict[str, Any]) 
         seg_pace = smoothed
 
     # per-km splits (elapsed time, stopped time shown separately)
-    ele_m = track.get("ele_m")
+    # prefer raw elevation for gain/loss (smoothed version undercounts repeated short climbs)
+    ele_m = track.get("ele_raw_m") or track.get("ele_m")
     splits: list[dict[str, Any]] = []
     km = 1
     prev_time = grid_time[0]

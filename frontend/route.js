@@ -152,6 +152,8 @@ document.addEventListener('alpine:init', () => {
         showNewFromActivity: false,
         raceSessions: [],
         newFromSessionId: '',
+        newFromDate: '',
+        newFromCandidates: [],
         isCreatingFromSession: false,
         newFromError: '',
         showPaceOverlay: false,
@@ -265,13 +267,27 @@ document.addEventListener('alpine:init', () => {
                 try {
                     const res = await fetch(`${API_BASE}/sessions/races`);
                     if (res.ok) {
-                        // hide races that already have an analysis route
                         const linked = new Set(this.routes.map((r) => r.session_id).filter((id) => id !== null));
                         this.raceSessions = (await res.json()).reverse().filter((s) => !linked.has(s.id));
                     }
                 } catch (e) {
                     console.error('Failed to fetch race sessions', e);
                 }
+            }
+        },
+
+        async fetchSessionsForNewFromDate() {
+            if (!this.newFromDate) { this.newFromCandidates = []; return; }
+            this.newFromCandidates = null; // loading state
+            try {
+                const d = new Date(this.newFromDate);
+                const minus1 = new Date(d); minus1.setDate(d.getDate() - 1);
+                const plus1 = new Date(d); plus1.setDate(d.getDate() + 1);
+                const fmt = (dt) => dt.toISOString().slice(0, 10);
+                const res = await fetch(`${API_BASE}/sessions?start_date=${fmt(minus1)}&end_date=${fmt(plus1)}`);
+                this.newFromCandidates = res.ok ? await res.json() : [];
+            } catch (e) {
+                this.newFromCandidates = [];
             }
         },
 
@@ -371,6 +387,7 @@ document.addEventListener('alpine:init', () => {
                 });
                 const tooltip = `km ${Number(m.distance_km).toFixed(1)}${m.label ? ' — ' + escapeHtml(m.label) : ''}`;
                 const lm = L.marker([m.lat, m.lng], { icon }).bindTooltip(tooltip).addTo(map);
+                lm.on('click', () => this.editMarker(m));
                 leafletMarkers.push(lm);
             }
             this.updateMarkerOverlayDataset();
@@ -622,7 +639,6 @@ document.addEventListener('alpine:init', () => {
 
         async deleteMarker(m) {
             if (!this.route) return;
-            if (!confirm('Delete this marker?')) return;
             try {
                 const res = await fetch(`${API_BASE}/routes/${this.route.id}/markers/${m.id}`, { method: 'DELETE' });
                 if (res.ok) await this.refreshMarkers();
