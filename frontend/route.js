@@ -829,7 +829,12 @@ document.addEventListener('alpine:init', () => {
             this.chatError = '';
             this.chatMessages.push({ role: 'user', content: text });
             this.chatInput = '';
+            if (this.$refs.chatInput) { this.$refs.chatInput.style.height = 'auto'; }
             this.isChatLoading = true;
+            this.$nextTick(() => {
+                const el = this.$refs.chatMessages;
+                if (el) el.scrollTop = el.scrollHeight;
+            });
 
             try {
                 const effectiveModel = this.chatModelOptions.includes(this.selectedChatModel)
@@ -857,6 +862,10 @@ document.addEventListener('alpine:init', () => {
                 if (!res.ok) throw new Error(data?.detail || 'LLM request failed');
 
                 this.chatMessages.push({ role: 'assistant', content: data?.answer || 'No response.' });
+                this.$nextTick(() => {
+                    const el = this.$refs.chatMessages;
+                    if (el) el.scrollTop = el.scrollHeight;
+                });
             } catch (e) {
                 this.chatError = e?.message || 'Failed to send message.';
             } finally {

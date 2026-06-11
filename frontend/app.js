@@ -910,7 +910,12 @@ document.addEventListener('alpine:init', () => {
             this.chatError = '';
             this.chatMessages.push({ role: 'user', content: composedText });
             this.chatInput = '';
+            if (this.$refs.chatInput) { this.$refs.chatInput.style.height = 'auto'; }
             this.isChatLoading = true;
+            this.$nextTick(() => {
+                const el = this.$refs.chatMessages;
+                if (el) el.scrollTop = el.scrollHeight;
+            });
 
             try {
                 if (this.saveChatHistory) {
@@ -965,6 +970,10 @@ document.addEventListener('alpine:init', () => {
                     role: 'assistant',
                     content: data?.answer || 'No response.',
                     mcp_trace: data?.mcp_trace || data?.context?.mcp_trace || null
+                });
+                this.$nextTick(() => {
+                    const el = this.$refs.chatMessages;
+                    if (el) el.scrollTop = el.scrollHeight;
                 });
                 if (this.saveChatHistory) {
                     await this.persistChatMessage('assistant', data?.answer || 'No response.');

@@ -323,14 +323,17 @@
                 <!-- Coach chat -->
                 <div class="bg-white p-5 rounded-lg shadow-sm border border-gray-200 mb-6">
                     <h3 class="text-xl font-semibold mb-3">🧠 Coach <span class="text-sm font-normal text-gray-500">(sees this route)</span></h3>
-                    <div class="border border-gray-200 rounded-md p-3 bg-gray-50 h-72 overflow-y-auto space-y-3 resize-y" style="min-height: 10rem; max-height: 70vh;">
+                    <div x-ref="chatMessages" class="border border-gray-200 rounded-md p-3 bg-gray-50 overflow-y-auto space-y-3" style="min-height: 4rem; max-height: 60vh; height: auto;">
+                        <template x-if="chatMessages.length === 0">
+                            <p class="text-sm text-gray-400 italic">No messages yet. Ask the coach about pacing, hardest sections, ravito strategy…</p>
+                        </template>
                         <template x-for="(message, idx) in chatMessages" :key="idx">
                             <div :class="message.role === 'user' ? 'flex justify-end' : 'flex justify-start'">
                                 <div :class="message.role === 'user'
-                                    ? 'max-w-[80%] rounded-2xl rounded-br-sm bg-blue-600 text-white px-3 py-2 text-sm whitespace-pre-wrap'
-                                    : 'max-w-[80%] rounded-2xl rounded-bl-sm bg-white border border-gray-200 text-gray-800 px-3 py-2 text-sm'">
+                                    ? 'max-w-[70%] rounded-2xl rounded-br-sm bg-blue-600 text-white px-3 py-2 text-sm'
+                                    : 'max-w-[90%] rounded-2xl rounded-bl-sm bg-white border border-gray-200 text-gray-800 px-3 py-2 text-sm'">
                                     <template x-if="message.role === 'user'">
-                                        <div class="leading-snug whitespace-pre-line break-words" x-text="message.content"></div>
+                                        <div class="leading-snug whitespace-pre-wrap break-words" x-text="message.content"></div>
                                     </template>
                                     <template x-if="message.role !== 'user'">
                                         <div class="coach-markdown" x-html="renderCoachMarkdown(message.content)"></div>
@@ -340,12 +343,12 @@
                         </template>
                     </div>
                     <p x-show="chatError" x-text="chatError" class="text-sm text-red-600 mt-2"></p>
-                    <form @submit.prevent="sendChatMessage()" class="mt-3 flex items-center gap-2">
+                    <form @submit.prevent="sendChatMessage()" class="mt-3 flex items-end gap-2">
                         <select
                             x-model="selectedChatModel"
                             @change="setChatModel($event.target.value)"
                             :disabled="isChatLoading"
-                            class="rounded-md border-gray-300 bg-white shadow-sm focus:border-blue-500 focus:ring-blue-500 text-sm border p-2"
+                            class="rounded-md border-gray-300 bg-white shadow-sm focus:border-blue-500 focus:ring-blue-500 text-sm border p-2 self-end"
                             title="Model"
                         >
                             <template x-for="model in chatModelOptions" :key="model">
@@ -353,14 +356,17 @@
                             </template>
                         </select>
                         <textarea
+                            x-ref="chatInput"
                             x-model="chatInput"
                             @keydown.enter="if (!$event.shiftKey) { $event.preventDefault(); sendChatMessage(); }"
+                            @input="$event.target.style.height = 'auto'; $event.target.style.height = Math.min($event.target.scrollHeight, 200) + 'px'"
                             :disabled="isChatLoading"
-                            placeholder="Ask the coach about this route (pacing, hardest sections, ravito strategy)..."
-                            rows="2"
-                            class="flex-1 rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm border p-2 resize-y"
+                            placeholder="Ask the coach about this route (pacing, hardest sections, ravito strategy)…"
+                            rows="1"
+                            class="flex-1 rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm border p-2 resize-none overflow-y-auto"
+                            style="min-height: 2.5rem; max-height: 200px;"
                         ></textarea>
-                        <button type="submit" :disabled="isChatLoading || !chatInput.trim()" class="bg-blue-600 text-white py-2 px-4 rounded hover:bg-blue-700 text-sm font-medium disabled:opacity-50">
+                        <button type="submit" :disabled="isChatLoading || !chatInput.trim()" class="bg-blue-600 text-white py-2 px-4 rounded hover:bg-blue-700 text-sm font-medium disabled:opacity-50 self-end">
                             <span x-text="isChatLoading ? 'Sending…' : 'Send'"></span>
                         </button>
                     </form>
