@@ -759,7 +759,20 @@ def create_route_from_session(payload: schemas.RouteMatchRequest, db: Session = 
     db.commit()
     db.refresh(route)
 
-    return _route_detail_response(route, [])
+    # Start / finish markers
+    track = processed["track"]
+    start_pt = interpolate_point_at_distance(track, track["dist_km"][0])
+    finish_pt = interpolate_point_at_distance(track, track["dist_km"][-1])
+    markers = [
+        crud.create_route_marker(db, route_id=route.id, kind="note",
+            distance_km=start_pt["distance_km"], lat=start_pt["lat"], lng=start_pt["lng"],
+            elevation_m=start_pt["elevation_m"], label="Start", note=None),
+        crud.create_route_marker(db, route_id=route.id, kind="note",
+            distance_km=finish_pt["distance_km"], lat=finish_pt["lat"], lng=finish_pt["lng"],
+            elevation_m=finish_pt["elevation_m"], label="Finish", note=None),
+    ]
+
+    return _route_detail_response(route, markers)
 
 
 @router.post("/routes/{route_id}/match-session", response_model=schemas.RouteComparisonResponse)
