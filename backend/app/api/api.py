@@ -542,8 +542,20 @@ async def upload_route(
         has_elevation=processed["has_elevation"],
     )
 
+    # Start / finish markers
+    track = processed["track"]
+    start_pt = interpolate_point_at_distance(track, track["dist_km"][0])
+    finish_pt = interpolate_point_at_distance(track, track["dist_km"][-1])
+    markers = [
+        crud.create_route_marker(db, route_id=route.id, kind="note",
+            distance_km=start_pt["distance_km"], lat=start_pt["lat"], lng=start_pt["lng"],
+            elevation_m=start_pt["elevation_m"], label="Start", note=None),
+        crud.create_route_marker(db, route_id=route.id, kind="note",
+            distance_km=finish_pt["distance_km"], lat=finish_pt["lat"], lng=finish_pt["lng"],
+            elevation_m=finish_pt["elevation_m"], label="Finish", note=None),
+    ]
+
     # Auto-create markers from GPX waypoints
-    markers = []
     for wpt in processed.get("waypoints", []):
         dist_km = nearest_distance_km(processed["track"], wpt["lat"], wpt["lng"])
         point = interpolate_point_at_distance(processed["track"], dist_km)
