@@ -581,7 +581,7 @@ document.addEventListener('alpine:init', () => {
         },
 
         toggleAddMode(kind) {
-            this.addMode = this.addMode === kind ? null : kind;
+            this.addMode = this.addMode ? null : kind;
         },
 
         openMarkerForm(kind, distanceKm) {

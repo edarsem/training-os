@@ -1297,7 +1297,7 @@ def get_route_details_tool(db: DBSession, *, route_id: int) -> dict[str, Any]:
     track = _json.loads(route.track_json)
     histogram = compute_slope_histogram(track.get("slope_pct"), float(track.get("interval_m", 20.0)))
     markers = crud.list_route_markers(db, route_id)
-    lines = [build_route_text_summary(route, markers, histogram)]
+    lines = [build_route_text_summary(route, markers, histogram, track=track)]
 
     # actual performance when the route is linked to an activity with GPS streams
     session = crud.get_session_by_id(db, route.session_id) if route.session_id else None

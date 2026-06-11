@@ -20,6 +20,7 @@ from app.core.gpx import (
     compare_route_with_activity,
     compute_slope_histogram,
     interpolate_point_at_distance,
+    nearest_distance_km,
     process_gpx,
     process_streams,
 )
@@ -540,7 +541,27 @@ async def upload_route(
         max_elevation_m=processed["max_elevation_m"],
         has_elevation=processed["has_elevation"],
     )
-    return _route_detail_response(route, [])
+
+    # Auto-create markers from GPX waypoints
+    markers = []
+    for wpt in processed.get("waypoints", []):
+        dist_km = nearest_distance_km(processed["track"], wpt["lat"], wpt["lng"])
+        point = interpolate_point_at_distance(processed["track"], dist_km)
+        label = wpt["name"]
+        note = wpt["desc"]
+        markers.append(crud.create_route_marker(
+            db,
+            route_id=route.id,
+            kind="note",
+            distance_km=point["distance_km"],
+            lat=point["lat"],
+            lng=point["lng"],
+            elevation_m=point["elevation_m"],
+            label=label,
+            note=note,
+        ))
+
+    return _route_detail_response(route, markers)
 
 
 @router.get("/routes", response_model=List[schemas.RouteSummaryResponse])

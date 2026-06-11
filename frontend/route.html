@@ -136,8 +136,7 @@
             <div>
                 <!-- Marker mode buttons -->
                 <div class="flex items-center gap-2 mb-3">
-                    <button @click="toggleAddMode('ravito')" :class="addMode === 'ravito' ? 'bg-orange-500 text-white' : 'bg-white text-gray-700'" class="px-3 py-1.5 border rounded shadow-sm hover:opacity-90 text-sm font-medium">🥤 Add ravito</button>
-                    <button @click="toggleAddMode('note')" :class="addMode === 'note' ? 'bg-yellow-500 text-white' : 'bg-white text-gray-700'" class="px-3 py-1.5 border rounded shadow-sm hover:opacity-90 text-sm font-medium">📝 Add note</button>
+                    <button @click="toggleAddMode('note')" :class="addMode ? 'bg-blue-600 text-white' : 'bg-white text-gray-700'" class="px-3 py-1.5 border rounded shadow-sm hover:opacity-90 text-sm font-medium">📝 Add note</button>
                     <span x-show="addMode" x-cloak class="text-sm text-gray-600">Click on the map or elevation profile to place the marker. Click the button again to cancel.</span>
                 </div>
 
@@ -377,6 +376,13 @@
                 <h3 class="text-lg font-bold mb-4" x-text="(markerForm.id ? 'Edit ' : 'Add ') + (markerForm.kind === 'ravito' ? '🥤 Ravito' : '📝 Note')"></h3>
                 <form @submit.prevent="saveMarker()" @keydown.meta.enter.prevent="saveMarker()" @keydown.ctrl.enter.prevent="saveMarker()" class="space-y-4">
                     <div>
+                        <label class="block text-sm font-medium text-gray-700 mb-1">Type</label>
+                        <div class="flex gap-2">
+                            <button type="button" @click="markerForm.kind = 'note'" :class="markerForm.kind === 'note' ? 'bg-yellow-500 text-white border-yellow-500' : 'bg-white text-gray-700 border-gray-300'" class="flex-1 py-1.5 border rounded text-sm font-medium hover:opacity-90">📝 Note</button>
+                            <button type="button" @click="markerForm.kind = 'ravito'" :class="markerForm.kind === 'ravito' ? 'bg-orange-500 text-white border-orange-500' : 'bg-white text-gray-700 border-gray-300'" class="flex-1 py-1.5 border rounded text-sm font-medium hover:opacity-90">🥤 Ravito</button>
+                        </div>
+                    </div>
+                    <div>
                         <label class="block text-sm font-medium text-gray-700">Distance (km)</label>
                         <input type="number" step="any" min="0" x-model="markerForm.distance_km" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm border p-2 sm:text-sm" required>
                     </div>
@@ -386,7 +392,7 @@
                     </div>
                     <div>
                         <label class="block text-sm font-medium text-gray-700">Note</label>
-                        <textarea x-model="markerForm.note" rows="3" placeholder="e.g. ravito, ate 2 gels, felt strong" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm border p-2 sm:text-sm"></textarea>
+                        <textarea x-model="markerForm.note" rows="3" placeholder="e.g. ate 2 gels, felt strong" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm border p-2 sm:text-sm"></textarea>
                     </div>
                     <div class="flex justify-end space-x-3 pt-2">
                         <button type="button" @click="isMarkerModalOpen = false" class="bg-white border border-gray-300 text-gray-700 py-2 px-4 rounded hover:bg-gray-50 text-sm font-medium">Cancel</button>
