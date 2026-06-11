@@ -104,11 +104,30 @@ def _rolling_mean(values: list[float], window: int) -> list[float]:
     return out
 
 
+def extract_waypoints(xml_text: str) -> list[dict[str, Any]]:
+    """Return waypoints (<wpt>) from a GPX file as a list of dicts with lat/lng/name/desc."""
+    try:
+        gpx = gpxpy.parse(xml_text)
+    except Exception:
+        return []
+    wpts = []
+    for w in gpx.waypoints:
+        wpts.append({
+            "lat": w.latitude,
+            "lng": w.longitude,
+            "elevation": w.elevation,
+            "name": (w.name or "").strip() or None,
+            "desc": (w.description or w.comment or "").strip() or None,
+        })
+    return wpts
+
+
 def process_gpx(xml_text: str) -> dict[str, Any]:
     """Parse GPX and return processed track + summary stats.
 
     Returns dict with keys: name, track (column-oriented dict), distance_km,
-    elevation_gain_m, elevation_loss_m, min_elevation_m, max_elevation_m, has_elevation.
+    elevation_gain_m, elevation_loss_m, min_elevation_m, max_elevation_m, has_elevation,
+    waypoints (list of dicts with lat/lng/name/desc).
     """
     points = _extract_points(xml_text)
 
@@ -120,6 +139,7 @@ def process_gpx(xml_text: str) -> dict[str, Any]:
 
     result = _build_track(points, cum_m)
     result["name"] = _extract_name(xml_text)
+    result["waypoints"] = extract_waypoints(xml_text)
     return result
 
 
@@ -275,6 +295,15 @@ def compute_slope_histogram(slope_pct: list[float] | None, interval_m: float) ->
             }
         )
     return out
+
+
+def nearest_distance_km(track: dict[str, Any], lat: float, lng: float) -> float:
+    """Return the distance_km on the track closest (Haversine) to the given lat/lng."""
+    lats = track["lat"]
+    lngs = track["lng"]
+    dists = track["dist_km"]
+    best_idx = min(range(len(lats)), key=lambda i: _haversine_m(lat, lng, lats[i], lngs[i]))
+    return float(dists[best_idx])
 
 
 def interpolate_point_at_distance(track: dict[str, Any], distance_km: float) -> dict[str, Any]:
@@ -486,7 +515,43 @@ def compare_route_with_activity(track: dict[str, Any], streams: dict[str, Any]) 
     }
 
 
-def build_route_text_summary(route: Any, markers: list[Any], histogram: list[dict[str, Any]]) -> str:
+def _km_splits_from_track(track: dict[str, Any]) -> list[dict[str, Any]]:
+    """Compute per-km D+/D- from the processed track grid."""
+    dist = track.get("dist_km") or []
+    ele = track.get("ele_m") or []
+    if not dist or not ele or len(dist) != len(ele):
+        return []
+    total_km = dist[-1]
+    n_km = max(1, int(math.ceil(total_km)))
+    splits: list[dict[str, Any]] = []
+    for k in range(n_km):
+        lo_km = float(k)
+        hi_km = float(k + 1)
+        idxs = [i for i, d in enumerate(dist) if lo_km <= d < hi_km]
+        if not idxs:
+            # last partial km — grab everything from lo_km onwards
+            idxs = [i for i, d in enumerate(dist) if d >= lo_km]
+        if len(idxs) < 2:
+            continue
+        d_plus = 0.0
+        d_minus = 0.0
+        for i in range(idxs[0] + 1, idxs[-1] + 1):
+            if ele[i] is not None and ele[i - 1] is not None:
+                diff = float(ele[i]) - float(ele[i - 1])
+                if diff > 0:
+                    d_plus += diff
+                else:
+                    d_minus += abs(diff)
+        splits.append({"km": k + 1, "d_plus_m": round(d_plus), "d_minus_m": round(d_minus)})
+    return splits
+
+
+def build_route_text_summary(
+    route: Any,
+    markers: list[Any],
+    histogram: list[dict[str, Any]],
+    track: dict[str, Any] | None = None,
+) -> str:
     """Compact text block describing a route for the coach LLM. Never includes track arrays."""
     lines = [f"Route: {route.name} (id {route.id})"]
     lines.append(f"Distance: {route.distance_km:.1f} km")
@@ -500,6 +565,12 @@ def build_route_text_summary(route: Any, markers: list[Any], histogram: list[dic
             lines.append("Gradient distribution:")
             for b in nonzero:
                 lines.append(f"  {b['label']}: {b['km']} km ({b['pct_of_route']}% of route)")
+        if track:
+            km_splits = _km_splits_from_track(track)
+            if km_splits:
+                lines.append("Per-km elevation profile (D+/D-):")
+                for s in km_splits:
+                    lines.append(f"  km {s['km']}: +{s['d_plus_m']}m/-{s['d_minus_m']}m")
     else:
         lines.append("No elevation data in this route's GPX file.")
 
