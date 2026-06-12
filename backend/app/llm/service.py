@@ -12,6 +12,7 @@ from app.llm.profile_prompt_compiler import ensure_compiled_profile_prompt
 from app.llm.prompt_loader import PromptRepository
 from app.llm.providers import LLMConfigurationError, LLMProviderError, build_provider
 from app.llm.query_layer import TrainingDataQueryService
+from app.crud import crud
 from app.schemas import schemas
 
 
@@ -97,6 +98,11 @@ class TrainingOSLLMService:
 
         if prompt_bundle.private_text:
             system_prompt_parts.append(prompt_bundle.private_text)
+
+        memory_items = crud.get_all_memory_items(self.db)
+        if memory_items:
+            lines = "\n".join(f"- {item.key}: {item.value}" for item in memory_items)
+            system_prompt_parts.append(f"[Coach Memory — facts you have learned about this athlete]\n{lines}")
 
         system_prompt = "\n\n".join(part.strip() for part in system_prompt_parts if part and part.strip())
 

@@ -155,3 +155,14 @@ class ChatMessage(Base):
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
     conversation = relationship("ChatConversation", back_populates="messages")
+
+
+class CoachMemoryItem(Base):
+    __tablename__ = "coach_memory"
+
+    id         = Column(Integer, primary_key=True, index=True)
+    key        = Column(String(80), unique=True, nullable=False, index=True)
+    value      = Column(String(200), nullable=False)
+    source     = Column(String(20), nullable=False, default="coach")  # "coach" | "user"
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), onupdate=func.now())

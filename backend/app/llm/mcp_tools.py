@@ -1374,6 +1374,27 @@ def list_routes_tool(db: DBSession) -> dict[str, Any]:
     return {"text": "\n".join(lines)}
 
 
+def update_memory_item_tool(db: DBSession, *, key: str, value: str) -> dict[str, Any]:
+    from app.crud import crud as _crud
+    key = str(key or "").strip()[:80]
+    value = str(value or "").strip()[:200]
+    if not key or not value:
+        return {"status": "error", "error": "key and value are required"}
+    item = _crud.upsert_memory_item(db, key=key, value=value, source="coach")
+    return {"status": "ok", "key": item.key, "value": item.value}
+
+
+def delete_memory_item_tool(db: DBSession, *, key: str) -> dict[str, Any]:
+    from app.crud import crud as _crud
+    key = str(key or "").strip()
+    if not key:
+        return {"status": "error", "error": "key is required"}
+    deleted = _crud.delete_memory_item_by_key(db, key)
+    if deleted:
+        return {"status": "ok", "key": key}
+    return {"status": "not_found", "key": key}
+
+
 def get_mcp_tools_schema() -> list[dict[str, Any]]:
     return [
         {
@@ -1539,6 +1560,47 @@ def get_mcp_tools_schema() -> list[dict[str, Any]]:
                     "type": "object",
                     "properties": {},
                     "required": [],
+                    "additionalProperties": False,
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "update_memory_item",
+                "description": (
+                    "Persist a durable fact about this athlete to long-term coach memory. "
+                    "Use a short snake_case key (e.g. 'goal', 'injury_history', 'target_race'). "
+                    "If the key already exists its value is replaced. "
+                    "Call this when you learn something worth remembering across conversations: "
+                    "goals, preferences, injury history, key race results, training constraints."
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "key":   {"type": "string", "maxLength": 80},
+                        "value": {"type": "string", "maxLength": 200},
+                    },
+                    "required": ["key", "value"],
+                    "additionalProperties": False,
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "delete_memory_item",
+                "description": (
+                    "Remove a fact from coach memory by its key. "
+                    "Use this when a previously stored fact is no longer true "
+                    "(e.g. a goal was achieved, an injury resolved, a constraint changed)."
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "key": {"type": "string"},
+                    },
+                    "required": ["key"],
                     "additionalProperties": False,
                 },
             },
@@ -1715,6 +1777,19 @@ def execute_mcp_tool(
 
     if name == "list_routes":
         return list_routes_tool(db)
+
+    if name == "update_memory_item":
+        return update_memory_item_tool(
+            db,
+            key=str(arguments.get("key", "")),
+            value=str(arguments.get("value", "")),
+        )
+
+    if name == "delete_memory_item":
+        return delete_memory_item_tool(
+            db,
+            key=str(arguments.get("key", "")),
+        )
 
     if name == "submit_final_answer":
         return {

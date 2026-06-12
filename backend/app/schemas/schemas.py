@@ -419,3 +419,21 @@ class ChatMessageResponse(BaseModel):
 
     class Config:
         from_attributes = True
+
+
+class CoachMemoryItemCreate(BaseModel):
+    key: str = Field(..., max_length=80)
+    value: str = Field(..., max_length=200)
+    source: str = Field(default="user", max_length=20)
+
+
+class CoachMemoryItemResponse(BaseModel):
+    id: int
+    key: str
+    value: str
+    source: str
+    created_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
+
+    class Config:
+        from_attributes = True

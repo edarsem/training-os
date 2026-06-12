@@ -79,6 +79,21 @@ def run_sqlite_schema_updates() -> None:
         if "zone_0_seconds" not in session_zone_columns:
             conn.execute(text("ALTER TABLE session_hr_zone_time ADD COLUMN zone_0_seconds INTEGER NOT NULL DEFAULT 0"))
 
+        conn.execute(
+            text(
+                """
+                CREATE TABLE IF NOT EXISTS coach_memory (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    key VARCHAR(80) NOT NULL UNIQUE,
+                    value VARCHAR(200) NOT NULL,
+                    source VARCHAR(20) NOT NULL DEFAULT 'coach',
+                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    updated_at DATETIME NULL
+                )
+                """
+            )
+        )
+
 def get_db():
     db = SessionLocal()
     try:

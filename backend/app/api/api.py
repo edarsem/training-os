@@ -424,6 +424,31 @@ def upsert_weekly_plan(plan: schemas.WeeklyPlanCreate, db: Session = Depends(get
     return crud.upsert_weekly_plan(db, plan)
 
 
+# --- Coach Memory ---
+
+@router.get("/memory", response_model=List[schemas.CoachMemoryItemResponse])
+def list_memory_items(db: Session = Depends(get_db)):
+    return crud.get_all_memory_items(db)
+
+
+@router.post("/memory", response_model=schemas.CoachMemoryItemResponse)
+def create_memory_item(payload: schemas.CoachMemoryItemCreate, db: Session = Depends(get_db)):
+    return crud.upsert_memory_item(db, key=payload.key, value=payload.value, source=payload.source)
+
+
+@router.put("/memory/item/{key}", response_model=schemas.CoachMemoryItemResponse)
+def update_memory_item(key: str, payload: schemas.CoachMemoryItemCreate, db: Session = Depends(get_db)):
+    return crud.upsert_memory_item(db, key=key, value=payload.value, source=payload.source)
+
+
+@router.delete("/memory/{item_id}")
+def delete_memory_item(item_id: int, db: Session = Depends(get_db)):
+    deleted = crud.delete_memory_item_by_id(db, item_id)
+    if not deleted:
+        raise HTTPException(status_code=404, detail="Memory item not found")
+    return {"status": "deleted"}
+
+
 # --- Chat History ---
 @router.get("/chat/conversations", response_model=List[schemas.ChatConversationSummaryResponse])
 def list_chat_conversations(db: Session = Depends(get_db), limit: int = Query(default=100, ge=1, le=500)):

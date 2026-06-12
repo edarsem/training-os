@@ -348,6 +348,45 @@ def list_chat_messages(db: DBSession, conversation_id: int) -> List[models.ChatM
     )
 
 
+def get_all_memory_items(db: DBSession) -> List[models.CoachMemoryItem]:
+    return db.query(models.CoachMemoryItem).order_by(models.CoachMemoryItem.id.asc()).all()
+
+
+def get_memory_item_by_key(db: DBSession, key: str) -> Optional[models.CoachMemoryItem]:
+    return db.query(models.CoachMemoryItem).filter(models.CoachMemoryItem.key == key).first()
+
+
+def upsert_memory_item(db: DBSession, key: str, value: str, source: str = "coach") -> models.CoachMemoryItem:
+    item = get_memory_item_by_key(db, key)
+    if item:
+        item.value = value[:200]
+        item.source = source
+    else:
+        item = models.CoachMemoryItem(key=key[:80], value=value[:200], source=source)
+        db.add(item)
+    db.commit()
+    db.refresh(item)
+    return item
+
+
+def delete_memory_item_by_key(db: DBSession, key: str) -> bool:
+    item = get_memory_item_by_key(db, key)
+    if not item:
+        return False
+    db.delete(item)
+    db.commit()
+    return True
+
+
+def delete_memory_item_by_id(db: DBSession, item_id: int) -> bool:
+    item = db.query(models.CoachMemoryItem).filter(models.CoachMemoryItem.id == item_id).first()
+    if not item:
+        return False
+    db.delete(item)
+    db.commit()
+    return True
+
+
 def create_chat_message(db: DBSession, conversation_id: int, role: str, content: str) -> models.ChatMessage:
     message = models.ChatMessage(
         conversation_id=conversation_id,
