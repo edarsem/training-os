@@ -696,7 +696,10 @@ def _build_comparison_response(route: models.Route, session: models.Session) -> 
 def _ensure_session_gps_streams(session: models.Session) -> dict | None:
     """Fetch and store the session's Strava GPS streams if missing. Returns the activity detail (or None if streams were already stored)."""
     if session.gps_stream_json:
-        return None
+        cached = json.loads(session.gps_stream_json)
+        if cached.get("velocity_smooth") and cached.get("cadence"):
+            return None
+        # Re-fetch: cache is stale (missing velocity_smooth or cadence stream)
 
     client = StravaClient()
     try:

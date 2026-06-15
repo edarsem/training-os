@@ -349,15 +349,52 @@ def compare_route_with_activity(track: dict[str, Any], streams: dict[str, Any]) 
     latlng = _stream_data("latlng")
     hr = _stream_data("heartrate")
     moving = _stream_data("moving")
-    has_moving_data = bool(moving) and len(moving) == len(time_s)
+    velocity = _stream_data("velocity_smooth")
+    cadence = _stream_data("cadence")
 
-    # cumulative moving time per sample: stopped periods (ravitos, pauses) don't advance it
+    # Stop detection priority: cadence > velocity_smooth > Strava moving boolean.
+    # Cadence is non-directional (shuffling at an aid station = 0 spm regardless of GPS drift).
+    # Threshold of 20 spm sits well below slow hiking (~70 spm) and catches pacing/shuffling.
+    # None cadence values (device gap) are treated as moving to avoid false stops.
+    # Runs shorter than MIN_STOP_DURATION_S are ignored (corners / GPS jitter).
+    STOP_CADENCE_SPM = 20
+    STOP_SPEED_MS = 0.5
+    MIN_STOP_DURATION_S = 5
+    has_cadence = bool(cadence) and len(cadence) == len(time_s)
+    has_velocity = bool(velocity) and len(velocity) == len(time_s)
+    has_moving_data = has_cadence or has_velocity or (bool(moving) and len(moving) == len(time_s))
+
     cum_moving_s: list[float] | None = None
     if has_moving_data:
+        if has_cadence:
+            raw_moving: list[bool] = [
+                c is None or float(c) >= STOP_CADENCE_SPM for c in cadence
+            ]
+        elif has_velocity:
+            raw_moving = [float(v) >= STOP_SPEED_MS for v in velocity]
+        else:
+            raw_moving = [bool(v) for v in moving]  # type: ignore[assignment]
+
+        filtered_moving = list(raw_moving)
+        i = 0
+        while i < len(filtered_moving):
+            if not filtered_moving[i]:
+                j = i + 1
+                while j < len(filtered_moving) and not filtered_moving[j]:
+                    j += 1
+                stop_end = j - 1
+                stop_dur = float(time_s[stop_end]) - float(time_s[i]) if stop_end < len(time_s) else 0.0
+                if stop_dur < MIN_STOP_DURATION_S:
+                    for k in range(i, j):
+                        filtered_moving[k] = True
+                i = j
+            else:
+                i += 1
+
         cum_moving_s = [0.0]
         for i in range(1, len(time_s)):
             dt = float(time_s[i]) - float(time_s[i - 1])
-            cum_moving_s.append(cum_moving_s[-1] + (dt if moving[i] and dt > 0 else 0.0))
+            cum_moving_s.append(cum_moving_s[-1] + (dt if filtered_moving[i] and dt > 0 else 0.0))
 
     route_dist_km = track["dist_km"]
     n = len(route_dist_km)
@@ -366,17 +403,21 @@ def compare_route_with_activity(track: dict[str, Any], streams: dict[str, Any]) 
 
     mismatch_pct = abs(activity_total_km - route_total_km) / route_total_km * 100.0 if route_total_km > 0 else 0.0
 
-    # time (elapsed + moving) and HR at each route grid distance, interpolated over the activity distance stream
+    # time (elapsed + moving), HR and cadence at each route grid distance, interpolated over the activity distance stream
     grid_time: list[float | None] = []
     grid_moving_time: list[float | None] = []
     grid_hr: list[float | None] = []
+    grid_cadence: list[float | None] = []
     j = 0
+    has_hr = hr and len(hr) == len(dist_m)
+    has_cad = cadence and len(cadence) == len(dist_m)
     for dk in route_dist_km:
         target_m = dk * 1000.0
         if target_m > dist_m[-1]:
             grid_time.append(None)
             grid_moving_time.append(None)
             grid_hr.append(None)
+            grid_cadence.append(None)
             continue
         while j < len(dist_m) - 2 and dist_m[j + 1] < target_m:
             j += 1
@@ -386,13 +427,21 @@ def compare_route_with_activity(track: dict[str, Any], streams: dict[str, Any]) 
             grid_moving_time.append(_interp(target_m, x0, x1, cum_moving_s[j], cum_moving_s[j + 1]))
         else:
             grid_moving_time.append(grid_time[-1])
-        if hr and len(hr) == len(dist_m):
+        if has_hr:
             try:
                 grid_hr.append(_interp(target_m, x0, x1, float(hr[j]), float(hr[j + 1])))
             except (TypeError, ValueError):
                 grid_hr.append(None)
         else:
             grid_hr.append(None)
+        if has_cad:
+            try:
+                v0, v1 = cadence[j], cadence[j + 1]
+                grid_cadence.append(_interp(target_m, x0, x1, float(v0), float(v1)) if v0 is not None and v1 is not None else None)
+            except (TypeError, ValueError):
+                grid_cadence.append(None)
+        else:
+            grid_cadence.append(None)
 
     # moving pace per grid segment (min/km), stops excluded; lightly smoothed over ~9 points like elevation
     seg_pace: list[float | None] = [None] * n
@@ -413,6 +462,16 @@ def compare_route_with_activity(track: dict[str, Any], streams: dict[str, Any]) 
             window = [p for p in seg_pace[max(0, i - half):min(n, i + half + 1)] if p is not None]
             smoothed.append(round(sum(window) / len(window), 3) if window else None)
         seg_pace = smoothed
+
+    # smooth cadence the same way
+    seg_cadence: list[float | None] = grid_cadence
+    if any(v is not None for v in grid_cadence):
+        half = SMOOTHING_WINDOW_POINTS // 2
+        smoothed_cad: list[float | None] = []
+        for i in range(n):
+            window = [v for v in grid_cadence[max(0, i - half):min(n, i + half + 1)] if v is not None]
+            smoothed_cad.append(round(sum(window) / len(window), 1) if window else None)
+        seg_cadence = smoothed_cad
 
     # per-km splits (elapsed time, stopped time shown separately)
     # prefer raw elevation for gain/loss (smoothed version undercounts repeated short climbs)
@@ -509,6 +568,7 @@ def compare_route_with_activity(track: dict[str, Any], streams: dict[str, Any]) 
         "total_stopped_s": max(0, total_elapsed_s - total_moving_s),
         "pace_min_per_km": seg_pace,
         "hr_bpm": [round(h, 0) if h is not None else None for h in grid_hr],
+        "cadence_spm": [round(c, 0) if c is not None else None for c in seg_cadence],
         "km_splits": splits,
         "bracket_stats": bracket_stats,
         "actual_latlng": actual_latlng,

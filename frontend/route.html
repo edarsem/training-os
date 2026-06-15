@@ -78,8 +78,19 @@
         <div class="bg-white p-4 rounded-lg shadow-sm border border-gray-200 mb-6 flex flex-wrap items-center gap-3">
             <select x-model="selectedRouteId" @change="loadRoute(selectedRouteId)" class="rounded-md border-gray-300 bg-white shadow-sm border p-2 text-sm min-w-[16rem]">
                 <option value="">— Select a route —</option>
-                <template x-for="r in routes" :key="r.id">
-                    <option :value="r.id" x-text="`${r.name} (${(r.distance_km || 0).toFixed(1)} km${r.has_elevation ? ', D+ ' + Math.round(r.elevation_gain_m) + ' m' : ''})`"></option>
+                <template x-if="routes.some(r => r.session_id)">
+                    <optgroup label="🏃 Strava activities">
+                        <template x-for="r in routes.filter(r => r.session_id)" :key="r.id">
+                            <option :value="r.id" x-text="`${r.session_date || (r.created_at ? r.created_at.slice(0,10) : '')} — ${r.name} (${(r.distance_km || 0).toFixed(1)} km${r.has_elevation ? ', D+ ' + Math.round(r.elevation_gain_m) + ' m' : ''})`"></option>
+                        </template>
+                    </optgroup>
+                </template>
+                <template x-if="routes.some(r => !r.session_id)">
+                    <optgroup label="📋 GPX plans">
+                        <template x-for="r in routes.filter(r => !r.session_id)" :key="r.id">
+                            <option :value="r.id" x-text="`${r.session_date || (r.created_at ? r.created_at.slice(0,10) : '')} — ${r.name} (${(r.distance_km || 0).toFixed(1)} km${r.has_elevation ? ', D+ ' + Math.round(r.elevation_gain_m) + ' m' : ''})`"></option>
+                        </template>
+                    </optgroup>
                 </template>
             </select>
             <button @click="toggleNewFromActivity()" class="px-3 py-2 bg-blue-600 text-white rounded shadow-sm hover:bg-blue-700 text-sm font-medium">➕ New from activity</button>
@@ -91,8 +102,8 @@
             <p x-show="uploadError" x-text="uploadError" class="text-sm text-red-600"></p>
             <p x-show="route && !route.has_elevation" x-cloak class="text-sm text-amber-600">⚠️ This GPX has no elevation data — profile and gradients unavailable.</p>
             <div x-show="route" x-cloak class="ml-auto text-sm text-gray-700 flex items-center gap-4">
-                <span>📏 <span x-text="route ? route.distance_km.toFixed(1) + ' km' : ''"></span></span>
-                <span x-show="route && route.has_elevation">⛰️ <span x-text="route && route.has_elevation ? '+' + Math.round(route.elevation_gain_m) + ' / -' + Math.round(route.elevation_loss_m) + ' m' : ''"></span></span>
+                <span>📏 <span x-text="(comparison && route && route.source_filename && dataSource === 'strava') ? Number(comparison.activity_distance_km || 0).toFixed(1) + ' km' : (route ? route.distance_km.toFixed(1) + ' km' : '')"></span></span>
+                <span x-show="route && route.has_elevation">⛰️ <span x-text="(comparison && route && route.source_filename && dataSource === 'strava') ? '+' + Math.round(stravaElevGain) + ' / -' + Math.round(stravaElevLoss) + ' m' : (route ? '+' + Math.round(route.elevation_gain_m) + ' / -' + Math.round(route.elevation_loss_m) + ' m' : '')"></span></span>
             </div>
         </div>
 
@@ -124,7 +135,7 @@
                 <p x-show="newFromDate && Array.isArray(newFromCandidates) && newFromCandidates.length === 0" class="text-sm text-gray-500 pb-2">No activities found ±1 day around this date.</p>
                 <span class="text-sm text-gray-400 pb-2">or session #</span>
                 <div>
-                    <input type="number" min="1" x-model="newFromSessionId" placeholder="e.g. 834" class="mt-1 w-28 rounded-md border-gray-300 shadow-sm border p-2 text-sm">
+                    <input type="number" min="1" x-model="newFromSessionId" @keydown.enter="createFromSession()" placeholder="e.g. 834" class="mt-1 w-28 rounded-md border-gray-300 shadow-sm border p-2 text-sm">
                 </div>
                 <button @click="createFromSession()" :disabled="!newFromSessionId || isCreatingFromSession" class="bg-blue-600 text-white py-2 px-4 rounded hover:bg-blue-700 text-sm font-medium disabled:opacity-50">
                     <span x-text="isCreatingFromSession ? 'Creating…' : 'Create route'"></span>
@@ -136,9 +147,19 @@
         <template x-if="route">
             <div>
                 <!-- Marker mode buttons -->
-                <div class="flex items-center gap-2 mb-3">
-                    <button @click="toggleAddMode('note')" :class="addMode ? 'bg-blue-600 text-white' : 'bg-white text-gray-700'" class="px-3 py-1.5 border rounded shadow-sm hover:opacity-90 text-sm font-medium">📝 Add note</button>
-                    <span x-show="addMode" x-cloak class="text-sm text-gray-600">Click on the map or elevation profile to place the marker. Click the button again to cancel.</span>
+                <div class="flex items-center gap-2 mb-2">
+                    <button @click="openNoteAtPinned()" :disabled="!pinnedDistanceKm" :class="pinnedDistanceKm ? 'bg-blue-600 text-white' : 'bg-white text-gray-400 border-gray-200'" class="px-3 py-1.5 border rounded shadow-sm text-sm font-medium" title="Press N">📝 Add note<span x-show="pinnedDistanceKm" x-text="pinnedDistanceKm ? ' (km ' + pinnedDistanceKm + ')' : ''"></span></button>
+                    <span x-show="pinnedDistanceKm" x-cloak class="text-sm text-violet-600">📍 pinned — click again anywhere to unpin · press N to add note</span>
+                    <span x-show="!pinnedDistanceKm" class="text-sm text-gray-400">Click on the map or elevation profile to pin a location</span>
+                </div>
+                <!-- Pinned location info panel -->
+                <div x-show="pinnedInfo" x-cloak class="flex flex-wrap items-center gap-4 text-xs text-gray-700 bg-slate-50 border border-slate-200 rounded px-3 py-1.5 mb-3 font-mono">
+                    <span x-show="pinnedInfo && pinnedInfo.time !== null">⏱ <span x-text="pinnedInfo ? formatSplitTime(pinnedInfo.time) : ''"></span></span>
+                    <span x-show="pinnedInfo && pinnedInfo.elevation !== null">↕ <span x-text="pinnedInfo ? pinnedInfo.elevation + ' m' : ''"></span></span>
+                    <span x-show="pinnedInfo && pinnedInfo.slope !== null"><span x-text="pinnedInfo ? (pinnedInfo.slope > 0 ? '+' : '') + pinnedInfo.slope + '%' : ''"></span></span>
+                    <span x-show="pinnedInfo && pinnedInfo.pace !== null">🏃 <span x-text="pinnedInfo ? formatPace(pinnedInfo.pace) + '/km' : ''"></span></span>
+                    <span x-show="pinnedInfo && pinnedInfo.hr !== null">♥ <span x-text="pinnedInfo ? pinnedInfo.hr + ' bpm' : ''"></span></span>
+                    <span x-show="pinnedInfo && pinnedInfo.cadence !== null">👟 <span x-text="pinnedInfo ? pinnedInfo.cadence + ' spm' : ''"></span></span>
                 </div>
 
                 <!-- Strava activity match -->
@@ -148,7 +169,7 @@
                             <h3 class="text-sm font-semibold text-gray-700 pb-2">🔗 Match a Strava activity:</h3>
                             <div>
                                 <label class="block text-xs font-medium text-gray-500">Session #</label>
-                                <input type="number" min="1" x-model="matchSessionId" placeholder="e.g. 834" class="mt-1 w-28 rounded-md border-gray-300 shadow-sm border p-2 text-sm">
+                                <input type="number" min="1" x-model="matchSessionId" @keydown.enter="matchSession()" placeholder="e.g. 834" class="mt-1 w-28 rounded-md border-gray-300 shadow-sm border p-2 text-sm">
                             </div>
                             <span class="text-sm text-gray-400 pb-2">or</span>
                             <div>
@@ -186,6 +207,10 @@
                                             <input type="checkbox" x-model="showActualTrace" @change="updateTraceVisibility()">
                                             <span class="text-red-700">Actual trace</span>
                                         </label>
+                                        <span class="text-gray-300">|</span>
+                                        <span class="text-gray-500 text-xs">Primary:</span>
+                                        <button @click="setDataSource('gpx')" :class="dataSource === 'gpx' ? 'bg-blue-100 text-blue-700 border-blue-300' : 'bg-white text-gray-500 border-gray-200'" class="px-2 py-0.5 border rounded text-xs font-medium hover:opacity-80">GPX</button>
+                                        <button @click="setDataSource('strava')" :class="dataSource === 'strava' ? 'bg-blue-100 text-blue-700 border-blue-300' : 'bg-white text-gray-500 border-gray-200'" class="px-2 py-0.5 border rounded text-xs font-medium hover:opacity-80">Strava</button>
                                     </div>
                                 </template>
                                 <button @click="unlinkSession()" class="ml-auto px-3 py-1 bg-white border border-red-300 text-red-600 rounded shadow-sm hover:bg-red-50 text-xs font-medium">Unlink</button>
@@ -210,7 +235,7 @@
 
                 <!-- Elevation profile -->
                 <div x-show="route.has_elevation" class="bg-white p-4 rounded-lg shadow-sm border border-gray-200 mb-6">
-                    <div class="flex items-center gap-4 mb-2">
+                    <div class="flex items-center gap-4 mb-2 flex-wrap">
                         <h3 class="text-lg font-semibold">⛰️ Elevation profile <span class="text-sm font-normal text-gray-500">(colored by gradient)</span></h3>
                         <template x-if="comparison">
                             <div class="flex items-center gap-3 text-sm text-gray-700">
@@ -222,6 +247,18 @@
                                     <input type="checkbox" x-model="showHrOverlay" @change="updateOverlayVisibility()">
                                     <span class="text-red-700">HR</span>
                                 </label>
+                                <label class="inline-flex items-center gap-1.5 cursor-pointer">
+                                    <input type="checkbox" x-model="showCadenceOverlay" @change="updateOverlayVisibility()">
+                                    <span class="text-emerald-700">Cadence</span>
+                                </label>
+                                <div class="flex rounded border border-gray-300 overflow-hidden text-xs ml-1">
+                                    <button @click="setXAxisMode('distance')"
+                                        :class="xAxisMode === 'distance' ? 'bg-gray-200 font-semibold text-gray-800' : 'bg-white text-gray-500 hover:bg-gray-50'"
+                                        class="px-2 py-0.5">km</button>
+                                    <button @click="setXAxisMode('time')"
+                                        :class="xAxisMode === 'time' ? 'bg-gray-200 font-semibold text-gray-800' : 'bg-white text-gray-500 hover:bg-gray-50'"
+                                        class="px-2 py-0.5 border-l border-gray-300">time</button>
+                                </div>
                             </div>
                         </template>
                     </div>

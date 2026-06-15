@@ -199,7 +199,25 @@ def upsert_weekly_plan(db: DBSession, plan: schemas.WeeklyPlanCreate) -> models.
 
 # --- Routes ---
 def list_routes(db: DBSession) -> List[models.Route]:
-    return db.query(models.Route).order_by(models.Route.created_at.desc(), models.Route.id.desc()).all()
+    routes = db.query(models.Route).all()
+    session_ids = [r.session_id for r in routes if r.session_id]
+    date_map: dict = {}
+    if session_ids:
+        rows = db.query(models.Session.id, models.Session.date).filter(models.Session.id.in_(session_ids)).all()
+        date_map = {row.id: row.date for row in rows}
+    for r in routes:
+        r.session_date = date_map.get(r.session_id)
+    strava = sorted(
+        [r for r in routes if r.session_id],
+        key=lambda r: r.session_date or date.min,
+        reverse=True,
+    )
+    gpx = sorted(
+        [r for r in routes if not r.session_id],
+        key=lambda r: r.created_at.date() if r.created_at else date.min,
+        reverse=True,
+    )
+    return strava + gpx
 
 
 def get_route(db: DBSession, route_id: int) -> Optional[models.Route]:

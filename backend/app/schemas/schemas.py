@@ -272,6 +272,7 @@ class RouteSummaryResponse(BaseModel):
     max_elevation_m: Optional[float] = None
     has_elevation: bool = False
     session_id: Optional[int] = None
+    session_date: Optional[date] = None
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
 
@@ -299,6 +300,7 @@ class RouteComparisonResponse(BaseModel):
     total_stopped_s: Optional[int] = None
     pace_min_per_km: List[Optional[float]] = Field(default_factory=list)
     hr_bpm: List[Optional[float]] = Field(default_factory=list)
+    cadence_spm: List[Optional[float]] = Field(default_factory=list)
     km_splits: List[dict[str, Any]] = Field(default_factory=list)
     bracket_stats: List[dict[str, Any]] = Field(default_factory=list)
     actual_latlng: List[List[float]] = Field(default_factory=list)

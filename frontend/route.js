@@ -12,6 +12,11 @@ let elevationChart = null;
 let histogramChart = null;
 let currentTrack = null;
 let plannedTraceVisible = true;
+let plannedTraceBaseOpacity = 1;
+let kmMarkers = [];
+let pinnedDot = null;
+let pinnedTrackIdx = null;
+let cumulativeTimeS = null;
 
 const SLOPE_COLORS = [
     { max: -40, color: '#172554' },
@@ -53,11 +58,16 @@ function destroyVisuals() {
     if (histogramChart) { histogramChart.destroy(); histogramChart = null; }
     currentTrack = null;
     plannedTraceVisible = true;
+    plannedTraceBaseOpacity = 1;
+    kmMarkers = [];
+    pinnedDot = null;
+    pinnedTrackIdx = null;
+    cumulativeTimeS = null;
 }
 
 function clearBracketHighlight() {
     if (highlightLayer && map) { map.removeLayer(highlightLayer); highlightLayer = null; }
-    if (trackPolyline) trackPolyline.setStyle({ opacity: plannedTraceVisible ? 1 : 0 });
+    if (trackPolyline) trackPolyline.setStyle({ opacity: plannedTraceVisible ? plannedTraceBaseOpacity : 0 });
 }
 
 function highlightBracketOnMap(bracket) {
@@ -114,8 +124,109 @@ function hideHover() {
         elevationChart.setActiveElements([]);
         elevationChart.tooltip.setActiveElements([], { x: 0, y: 0 });
         elevationChart.update('none');
+        if (pinnedTrackIdx !== null) {
+            // Restore pinned tooltip after Chart.js finishes its own mouseleave cleanup
+            setTimeout(() => {
+                if (pinnedTrackIdx !== null && elevationChart) {
+                    elevationChart.setActiveElements([{ datasetIndex: 0, index: pinnedTrackIdx }]);
+                    elevationChart.tooltip.setActiveElements([{ datasetIndex: 0, index: pinnedTrackIdx }], { x: 0, y: 0 });
+                    elevationChart.update('none');
+                }
+            }, 0);
+        }
     }
 }
+
+function buildCumulativeTime(comparison, track) {
+    if (!comparison || !comparison.km_splits || !track) return null;
+    const splits = [...comparison.km_splits].sort((a, b) => a.km - b.km);
+    const kmCum = { 0: 0 };
+    let cum = 0;
+    for (const s of splits) { cum += (s.duration_s || 0); kmCum[s.km] = cum; }
+    const result = [];
+    for (let i = 0; i < track.n; i++) {
+        const d = track.dist_km[i];
+        const km = Math.floor(d);
+        const t0 = kmCum[km] ?? 0;
+        const t1 = kmCum[km + 1] ?? t0;
+        result.push(t0 + (d - km) * (t1 - t0));
+    }
+    return result;
+}
+
+function showPinnedAtIndex(idx) {
+    if (!currentTrack || idx === null || idx < 0 || idx >= currentTrack.n) return;
+    const latlng = [currentTrack.lat[idx], currentTrack.lng[idx]];
+    if (pinnedDot) {
+        pinnedDot.setLatLng(latlng);
+    } else if (map) {
+        pinnedDot = L.circleMarker(latlng, {
+            radius: 7, color: '#7c3aed', fillColor: '#a78bfa', fillOpacity: 0.9, weight: 2,
+        }).addTo(map);
+    }
+}
+
+function buildStopPositions(kmSplits) {
+    if (!kmSplits) return [];
+    const sorted = [...kmSplits].sort((a, b) => a.km - b.km);
+    let cum = 0;
+    const kmCum = { 0: 0 };
+    for (const s of sorted) { cum += (s.duration_s || 0); kmCum[s.km] = cum; }
+    return sorted
+        .filter((s) => (s.stopped_s || 0) >= 15)
+        .map((s) => ({ km: s.km, stopped_s: s.stopped_s, time_s: kmCum[s.km] ?? null }));
+}
+
+const stopLinesPlugin = {
+    id: 'stopLines',
+    afterDraw(chart) {
+        const stops = chart.$stopPositions;
+        if (!stops || stops.length === 0) return;
+        const ctx = chart.ctx;
+        const xAxis = chart.scales.x;
+        const { top, bottom } = chart.chartArea;
+        const useTime = chart.$xAxisMode === 'time';
+        const mins = (s) => Math.floor(s / 60);
+        const secs = (s) => Math.round(s % 60);
+        const fmtStop = (s) => mins(s) > 0 ? `${mins(s)}'${String(secs(s)).padStart(2, '0')}"` : `${secs(s)}"`;
+        ctx.save();
+        ctx.lineWidth = 1.5;
+        for (const stop of stops) {
+            const label = fmtStop(stop.stopped_s);
+            if (useTime && stop.time_s !== null) {
+                const xEnd = xAxis.getPixelForValue(stop.time_s);
+                const xStart = xAxis.getPixelForValue(stop.time_s - stop.stopped_s);
+                ctx.fillStyle = 'rgba(234, 179, 8, 0.12)';
+                ctx.fillRect(xStart, top, xEnd - xStart, bottom - top);
+                ctx.beginPath();
+                ctx.setLineDash([3, 4]);
+                ctx.strokeStyle = 'rgba(234, 179, 8, 0.7)';
+                ctx.moveTo(xStart, top); ctx.lineTo(xStart, bottom); ctx.stroke();
+                ctx.beginPath();
+                ctx.moveTo(xEnd, top); ctx.lineTo(xEnd, bottom); ctx.stroke();
+                ctx.setLineDash([]);
+                ctx.font = 'bold 9px sans-serif';
+                ctx.textAlign = 'center';
+                ctx.textBaseline = 'top';
+                ctx.fillStyle = 'rgba(161, 98, 7, 0.9)';
+                ctx.fillText(label, (xStart + xEnd) / 2, top + 3);
+            } else if (!useTime) {
+                const x = xAxis.getPixelForValue(stop.km);
+                ctx.beginPath();
+                ctx.setLineDash([3, 4]);
+                ctx.strokeStyle = 'rgba(234, 179, 8, 0.7)';
+                ctx.moveTo(x, top); ctx.lineTo(x, bottom); ctx.stroke();
+                ctx.setLineDash([]);
+                ctx.font = 'bold 9px sans-serif';
+                ctx.textAlign = 'center';
+                ctx.textBaseline = 'top';
+                ctx.fillStyle = 'rgba(161, 98, 7, 0.9)';
+                ctx.fillText(label, x, top + 3);
+            }
+        }
+        ctx.restore();
+    },
+};
 
 function escapeHtml(text) {
     return String(text || '')
@@ -134,7 +245,11 @@ document.addEventListener('alpine:init', () => {
         isUploading: false,
         uploadError: '',
 
-        addMode: null, // 'ravito' | 'note' | null
+        pinnedDistanceKm: null,
+        pinnedInfo: null,
+        dataSource: 'gpx',
+        stravaElevGain: 0,
+        stravaElevLoss: 0,
         isMarkerModalOpen: false,
         markerForm: { id: null, kind: 'ravito', distance_km: 0, label: '', note: '' },
 
@@ -158,6 +273,8 @@ document.addEventListener('alpine:init', () => {
         newFromError: '',
         showPaceOverlay: false,
         showHrOverlay: false,
+        showCadenceOverlay: false,
+        xAxisMode: 'distance',
 
         chatMessages: [],
         chatInput: '',
@@ -182,6 +299,12 @@ document.addEventListener('alpine:init', () => {
             if (stored && this.chatModelOptions.includes(stored)) {
                 this.selectedChatModel = stored;
             }
+            document.addEventListener('keydown', (e) => {
+                if ((e.key === 'n' || e.key === 'N') &&
+                    !['INPUT', 'TEXTAREA', 'SELECT'].includes(document.activeElement?.tagName || '')) {
+                    this.openNoteAtPinned();
+                }
+            });
             await this.fetchRoutes();
             if (this.routes.length > 0) {
                 this.selectedRouteId = String(this.routes[0].id);
@@ -202,7 +325,11 @@ document.addEventListener('alpine:init', () => {
         async loadRoute(routeId) {
             destroyVisuals();
             this.route = null;
-            this.addMode = null;
+            this.pinnedDistanceKm = null;
+            this.pinnedInfo = null;
+            this.dataSource = 'gpx';
+            this.stravaElevGain = 0;
+            this.stravaElevLoss = 0;
             this.chatMessages = [];
             this.chatError = '';
             this.comparison = null;
@@ -212,6 +339,8 @@ document.addEventListener('alpine:init', () => {
             this.matchError = '';
             this.showPaceOverlay = false;
             this.showHrOverlay = false;
+            this.showCadenceOverlay = false;
+            this.xAxisMode = 'distance';
             this.showPlannedTrace = true;
             this.showActualTrace = true;
             if (!routeId) return;
@@ -365,12 +494,13 @@ document.addEventListener('alpine:init', () => {
             });
             map.on('mouseout', hideHover);
             map.on('click', (e) => {
-                if (!this.addMode) return;
+                if (pinnedTrackIdx !== null) { this.clearPinned(); return; }
                 const idx = nearestTrackIndex(e.latlng.lat, e.latlng.lng);
-                this.openMarkerForm(this.addMode, currentTrack.dist_km[idx]);
+                this.setPinned(idx);
             });
 
             this.renderMapMarkers();
+            this.renderKmMarkers();
         },
 
         renderMapMarkers() {
@@ -387,7 +517,7 @@ document.addEventListener('alpine:init', () => {
                 });
                 const tooltip = `km ${Number(m.distance_km).toFixed(1)}${m.label ? ' — ' + escapeHtml(m.label) : ''}`;
                 const lm = L.marker([m.lat, m.lng], { icon }).bindTooltip(tooltip).addTo(map);
-                lm.on('click', () => this.editMarker(m));
+                lm.on('click', (e) => { L.DomEvent.stopPropagation(e); this.editMarker(m); });
                 leafletMarkers.push(lm);
             }
             this.updateMarkerOverlayDataset();
@@ -454,8 +584,30 @@ document.addEventListener('alpine:init', () => {
                             spanGaps: true,
                             hidden: true,
                         },
+                        {
+                            label: 'Cadence (spm)',
+                            data: [],
+                            yAxisID: 'cadence',
+                            borderColor: 'rgba(5, 150, 105, 0.75)',
+                            pointRadius: 0,
+                            borderWidth: 1.5,
+                            spanGaps: true,
+                            hidden: true,
+                        },
+                        {
+                            type: 'scatter',
+                            label: '_pin',
+                            data: [],
+                            pointRadius: 8,
+                            pointHoverRadius: 8,
+                            pointStyle: 'circle',
+                            backgroundColor: 'rgba(167, 139, 250, 0.9)',
+                            borderColor: '#7c3aed',
+                            borderWidth: 2,
+                        },
                     ],
                 },
+                plugins: [stopLinesPlugin],
                 options: {
                     responsive: true,
                     maintainAspectRatio: false,
@@ -466,9 +618,9 @@ document.addEventListener('alpine:init', () => {
                         if (points.length > 0) showHoverAtIndex(points[0].index);
                     },
                     onClick: (event, elements, chart) => {
-                        if (!self.addMode) return;
+                        if (pinnedTrackIdx !== null) { self.clearPinned(); return; }
                         const points = chart.getElementsAtEventForMode(event, 'index', { intersect: false }, true);
-                        if (points.length > 0) self.openMarkerForm(self.addMode, track.dist_km[points[0].index]);
+                        if (points.length > 0) self.setPinned(points[0].index);
                     },
                     scales: {
                         x: {
@@ -490,12 +642,34 @@ document.addEventListener('alpine:init', () => {
                             grid: { drawOnChartArea: false },
                             title: { display: true, text: 'HR (bpm)' },
                         },
+                        cadence: {
+                            position: 'right',
+                            display: false,
+                            grid: { drawOnChartArea: false },
+                            title: { display: true, text: 'Cadence (spm)' },
+                        },
                     },
                     plugins: {
                         legend: { display: false },
                         tooltip: {
                             callbacks: {
-                                title: (items) => `km ${Number(items[0].parsed.x).toFixed(2)}`,
+                                title: (items) => {
+                                    const idx = items[0].dataIndex;
+                                    if (self.xAxisMode === 'time' && cumulativeTimeS && idx !== undefined) {
+                                        const t = cumulativeTimeS[idx];
+                                        const km = currentTrack?.dist_km[idx];
+                                        let title = t != null ? self.formatSplitTime(Math.round(t)) : '—';
+                                        if (km != null) title += ` · km ${Number(km).toFixed(2)}`;
+                                        return title;
+                                    }
+                                    const distKm = Number(items[0].parsed.x);
+                                    let title = `km ${distKm.toFixed(2)}`;
+                                    if (cumulativeTimeS && idx !== undefined) {
+                                        const t = cumulativeTimeS[idx];
+                                        if (t != null) title += ` · ${self.formatSplitTime(Math.round(t))}`;
+                                    }
+                                    return title;
+                                },
                                 label: (item) => {
                                     if (item.datasetIndex === 1) {
                                         const m = item.raw.marker;
@@ -503,8 +677,27 @@ document.addEventListener('alpine:init', () => {
                                     }
                                     if (item.datasetIndex === 2) return `Moving pace ${self.formatPace(item.parsed.y)}`;
                                     if (item.datasetIndex === 3) return `HR ${Math.round(item.parsed.y)} bpm`;
+                                    if (item.datasetIndex === 4) return `Cadence ${Math.round(item.parsed.y)} spm`;
+                                    if (item.datasetIndex === 5) return null;
                                     const slope = Math.round(track.slope_pct[item.dataIndex]);
                                     return `${Math.round(item.parsed.y)} m · ${slope > 0 ? '+' : ''}${slope}%`;
+                                },
+                                afterBody: (items) => {
+                                    const hoverIdx = items[0]?.dataIndex;
+                                    if (pinnedTrackIdx === null || pinnedTrackIdx === hoverIdx) return [];
+                                    const p = pinnedTrackIdx;
+                                    const lines = ['─────────'];
+                                    if (self.xAxisMode === 'time' && cumulativeTimeS?.[p] != null) {
+                                        lines.push(`📍 ${self.formatSplitTime(Math.round(cumulativeTimeS[p]))} · km ${Number(track.dist_km[p]).toFixed(2)}`);
+                                    } else {
+                                        lines.push(`📍 km ${Number(track.dist_km[p]).toFixed(2)}`);
+                                        if (cumulativeTimeS?.[p] != null) lines.push(`   ${self.formatSplitTime(Math.round(cumulativeTimeS[p]))}`);
+                                    }
+                                    if (track.ele_m && track.slope_pct) {
+                                        const sl = Math.round(track.slope_pct[p]);
+                                        lines.push(`   ${Math.round(track.ele_m[p])} m · ${sl > 0 ? '+' : ''}${sl}%`);
+                                    }
+                                    return lines;
                                 },
                             },
                         },
@@ -519,9 +712,11 @@ document.addEventListener('alpine:init', () => {
         updateMarkerOverlayDataset() {
             if (!elevationChart || !currentTrack || !currentTrack.ele_m) return;
             const intervalKm = (currentTrack.interval_m || 20) / 1000;
+            const useTime = this.xAxisMode === 'time' && !!cumulativeTimeS;
             const data = (this.route?.markers || []).map((m) => {
                 const idx = Math.min(currentTrack.n - 1, Math.max(0, Math.round(Number(m.distance_km) / intervalKm)));
-                return { x: Number(m.distance_km), y: currentTrack.ele_m[idx], marker: m };
+                const xVal = useTime ? (cumulativeTimeS[idx] ?? Number(m.distance_km)) : Number(m.distance_km);
+                return { x: xVal, y: currentTrack.ele_m[idx], marker: m };
             });
             elevationChart.data.datasets[1].data = data;
             elevationChart.update('none');
@@ -580,8 +775,73 @@ document.addEventListener('alpine:init', () => {
             return [...(this.route?.markers || [])].sort((a, b) => Number(a.distance_km) - Number(b.distance_km));
         },
 
-        toggleAddMode(kind) {
-            this.addMode = this.addMode ? null : kind;
+        setPinned(idx) {
+            if (!currentTrack || idx === null || idx < 0 || idx >= currentTrack.n) return;
+            pinnedTrackIdx = idx;
+            this.pinnedDistanceKm = Number(currentTrack.dist_km[idx]).toFixed(2);
+            showPinnedAtIndex(idx);
+            const paceArr = this.comparison?.pace_min_per_km;
+            const hrArr = this.comparison?.hr_bpm;
+            const cadArr = this.comparison?.cadence_spm;
+            this.pinnedInfo = {
+                time: cumulativeTimeS?.[idx] != null ? Math.round(cumulativeTimeS[idx]) : null,
+                elevation: currentTrack.ele_m ? Math.round(currentTrack.ele_m[idx]) : null,
+                slope: currentTrack.slope_pct ? Math.round(currentTrack.slope_pct[idx]) : null,
+                pace: paceArr?.[idx] != null && isFinite(paceArr[idx]) ? paceArr[idx] : null,
+                hr: hrArr?.[idx] != null ? Math.round(hrArr[idx]) : null,
+                cadence: cadArr?.[idx] != null ? Math.round(cadArr[idx]) : null,
+            };
+            if (elevationChart && currentTrack.ele_m) {
+                const pinX = (this.xAxisMode === 'time' && cumulativeTimeS?.[idx] != null)
+                    ? cumulativeTimeS[idx] : currentTrack.dist_km[idx];
+                elevationChart.data.datasets[5].data = [{ x: pinX, y: currentTrack.ele_m[idx] }];
+                elevationChart.setActiveElements([{ datasetIndex: 0, index: idx }]);
+                elevationChart.tooltip.setActiveElements([{ datasetIndex: 0, index: idx }], { x: 0, y: 0 });
+                elevationChart.update('none');
+            }
+        },
+
+        clearPinned() {
+            pinnedTrackIdx = null;
+            this.pinnedDistanceKm = null;
+            this.pinnedInfo = null;
+            if (pinnedDot && map) { map.removeLayer(pinnedDot); pinnedDot = null; }
+            if (elevationChart) {
+                elevationChart.data.datasets[5].data = [];
+                elevationChart.setActiveElements([]);
+                elevationChart.tooltip.setActiveElements([], { x: 0, y: 0 });
+                elevationChart.update('none');
+            }
+        },
+
+        openNoteAtPinned() {
+            if (pinnedTrackIdx === null || !currentTrack || !this.route) return;
+            this.openMarkerForm('note', currentTrack.dist_km[pinnedTrackIdx]);
+        },
+
+        setDataSource(source) {
+            this.dataSource = source;
+            this.updateTraceVisibility();
+        },
+
+        renderKmMarkers() {
+            if (!map || !currentTrack) return;
+            kmMarkers.forEach((m) => map.removeLayer(m));
+            kmMarkers = [];
+            const totalKm = currentTrack.dist_km[currentTrack.n - 1];
+            const intervalKm = (currentTrack.interval_m || 20) / 1000;
+            for (let km = 1; km <= Math.floor(totalKm); km++) {
+                const idx = Math.min(currentTrack.n - 1, Math.max(0, Math.round(km / intervalKm)));
+                const icon = L.divIcon({
+                    className: '',
+                    html: `<div style="background:rgba(255,255,255,0.85);border:1px solid #9ca3af;border-radius:8px;padding:1px 4px;font-size:9px;font-weight:700;color:#374151;white-space:nowrap;">${km}</div>`,
+                    iconSize: null,
+                    iconAnchor: [8, 8],
+                });
+                const m = L.marker([currentTrack.lat[idx], currentTrack.lng[idx]], { icon, interactive: false, zIndexOffset: -200 });
+                m.addTo(map);
+                kmMarkers.push(m);
+            }
         },
 
         openMarkerForm(kind, distanceKm) {
@@ -629,7 +889,7 @@ document.addEventListener('alpine:init', () => {
                     throw new Error(data?.detail || 'Failed to save marker');
                 }
                 this.isMarkerModalOpen = false;
-                this.addMode = null;
+                this.clearPinned();
                 await this.refreshMarkers();
             } catch (e) {
                 console.error('Failed to save marker', e);
@@ -707,6 +967,12 @@ document.addEventListener('alpine:init', () => {
 
         applyComparison(data) {
             this.comparison = data;
+            if (this.hasPlannedTrace()) this.dataSource = 'strava';
+            cumulativeTimeS = buildCumulativeTime(data, currentTrack);
+            if (data.km_splits) {
+                this.stravaElevGain = data.km_splits.reduce((s, k) => s + (k.d_plus_m || 0), 0);
+                this.stravaElevLoss = data.km_splits.reduce((s, k) => s + (k.d_minus_m || 0), 0);
+            }
             this.$nextTick(() => {
                 this.renderActualPolyline();
                 this.updateOverlayData();
@@ -720,9 +986,16 @@ document.addEventListener('alpine:init', () => {
                 if (!res.ok) return;
                 this.route.session_id = null;
                 this.comparison = null;
+                this.dataSource = 'gpx';
+                this.stravaElevGain = 0;
+                this.stravaElevLoss = 0;
                 this.showPaceOverlay = false;
                 this.showHrOverlay = false;
+                this.showCadenceOverlay = false;
+                this.xAxisMode = 'distance';
+                cumulativeTimeS = null;
                 if (actualPolyline && map) { map.removeLayer(actualPolyline); actualPolyline = null; }
+                this.updateTraceVisibility();
                 this.updateOverlayData();
             } catch (e) {
                 console.error('Failed to unlink session', e);
@@ -747,14 +1020,46 @@ document.addEventListener('alpine:init', () => {
 
         updateTraceVisibility() {
             plannedTraceVisible = !!this.showPlannedTrace;
-            if (trackPolyline) trackPolyline.setStyle({ opacity: plannedTraceVisible ? 1 : 0 });
-            if (actualPolyline) actualPolyline.setStyle({ opacity: this.showActualTrace ? 0.8 : 0 });
+            const stravaIsPrimary = this.hasPlannedTrace() && this.dataSource === 'strava';
+            if (stravaIsPrimary) {
+                plannedTraceBaseOpacity = 0.7;
+                if (trackPolyline) trackPolyline.setStyle({ color: '#93c5fd', weight: 3, dashArray: '6 6', opacity: plannedTraceVisible ? 0.7 : 0 });
+                if (actualPolyline) actualPolyline.setStyle({ color: '#2563eb', weight: 4, dashArray: '', opacity: this.showActualTrace ? 1 : 0 });
+            } else {
+                plannedTraceBaseOpacity = 1;
+                if (trackPolyline) trackPolyline.setStyle({ color: '#2563eb', weight: 4, dashArray: '', opacity: plannedTraceVisible ? 1 : 0 });
+                if (actualPolyline) actualPolyline.setStyle({ color: '#dc2626', weight: 3, dashArray: '6 6', opacity: this.showActualTrace ? 0.8 : 0 });
+            }
         },
 
         updateOverlayData() {
             if (!elevationChart) return;
+            if (!this.comparison) this.xAxisMode = 'distance';
             elevationChart.data.datasets[2].data = this.comparison ? this.comparison.pace_min_per_km : [];
             elevationChart.data.datasets[3].data = this.comparison ? this.comparison.hr_bpm : [];
+            elevationChart.data.datasets[4].data = this.comparison ? this.comparison.cadence_spm : [];
+            elevationChart.$stopPositions = buildStopPositions(this.comparison?.km_splits);
+            this.setXAxisMode(this.xAxisMode);
+        },
+
+        setXAxisMode(mode) {
+            if (!elevationChart || !currentTrack) return;
+            const useTime = mode === 'time' && !!cumulativeTimeS;
+            this.xAxisMode = useTime ? 'time' : 'distance';
+            const labels = useTime ? cumulativeTimeS : currentTrack.dist_km;
+            elevationChart.data.labels = labels;
+            elevationChart.$xAxisMode = this.xAxisMode;
+            const xAxis = elevationChart.options.scales.x;
+            xAxis.max = labels[labels.length - 1];
+            xAxis.title.text = useTime ? 'Time' : 'Distance (km)';
+            xAxis.ticks = useTime
+                ? { callback: (val) => this.formatSplitTime(Math.round(val)) }
+                : {};
+            this.updateMarkerOverlayDataset();
+            if (pinnedTrackIdx !== null && currentTrack.ele_m) {
+                const xVal = useTime ? (cumulativeTimeS[pinnedTrackIdx] ?? null) : currentTrack.dist_km[pinnedTrackIdx];
+                if (xVal !== null) elevationChart.data.datasets[5].data = [{ x: xVal, y: currentTrack.ele_m[pinnedTrackIdx] }];
+            }
             this.updateOverlayVisibility();
         },
 
@@ -762,10 +1067,13 @@ document.addEventListener('alpine:init', () => {
             if (!elevationChart) return;
             const showPace = !!(this.comparison && this.showPaceOverlay);
             const showHr = !!(this.comparison && this.showHrOverlay);
+            const showCadence = !!(this.comparison && this.showCadenceOverlay);
             elevationChart.data.datasets[2].hidden = !showPace;
             elevationChart.data.datasets[3].hidden = !showHr;
+            elevationChart.data.datasets[4].hidden = !showCadence;
             elevationChart.options.scales.pace.display = showPace;
             elevationChart.options.scales.hr.display = showHr;
+            elevationChart.options.scales.cadence.display = showCadence;
             elevationChart.update('none');
         },
 

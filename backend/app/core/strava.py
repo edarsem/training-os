@@ -463,7 +463,7 @@ class StravaClient:
         if self._is_access_token_expired():
             self.refresh_access_token()
 
-        keys = ["time", "distance", "latlng", "altitude", "velocity_smooth", "heartrate", "moving"]
+        keys = ["time", "distance", "latlng", "altitude", "velocity_smooth", "heartrate", "moving", "cadence"]
         try:
             streams, _ = self._fetch_activity_streams(int(activity_id), keys=keys)
         except StravaAPIError as exc:
