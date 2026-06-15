@@ -483,6 +483,171 @@ def interpolate_point_at_distance(track: dict[str, Any], distance_km: float) -> 
     return {"distance_km": d, "lat": round(lat, 6), "lng": round(lng, 6), "elevation_m": ele}
 
 
+def _grid_metrics(
+    track: dict[str, Any],
+    time_s: list[Any],
+    dist_m: list[Any],
+    hr: list[Any] | None,
+    cadence: list[Any] | None,
+    cum_moving_s: list[float] | None,
+) -> dict[str, Any]:
+    """Interpolate the activity's time/HR/cadence onto track['dist_km'], then derive moving pace,
+    per-km splits and per-gradient-bracket stats. Run on the planned route (the planned-vs-actual
+    comparison) and on the activity's own track (the activity-native analysis)."""
+    grid_dist_km = track["dist_km"]
+    n = len(grid_dist_km)
+
+    grid_time: list[float | None] = []
+    grid_moving_time: list[float | None] = []
+    grid_hr: list[float | None] = []
+    grid_cadence: list[float | None] = []
+    j = 0
+    has_hr = hr and len(hr) == len(dist_m)
+    has_cad = cadence and len(cadence) == len(dist_m)
+    last_m = float(dist_m[-1])
+    for dk in grid_dist_km:
+        target_m = dk * 1000.0
+        if target_m > last_m + 2.0:  # genuinely past the activity (e.g. planned route is longer)
+            grid_time.append(None)
+            grid_moving_time.append(None)
+            grid_hr.append(None)
+            grid_cadence.append(None)
+            continue
+        target_m = min(target_m, last_m)  # clamp sub-metre rounding overshoot at the very end
+        while j < len(dist_m) - 2 and dist_m[j + 1] < target_m:
+            j += 1
+        x0, x1 = float(dist_m[j]), float(dist_m[j + 1])
+        grid_time.append(_interp(target_m, x0, x1, float(time_s[j]), float(time_s[j + 1])))
+        if cum_moving_s is not None:
+            grid_moving_time.append(_interp(target_m, x0, x1, cum_moving_s[j], cum_moving_s[j + 1]))
+        else:
+            grid_moving_time.append(grid_time[-1])
+        if has_hr:
+            try:
+                grid_hr.append(_interp(target_m, x0, x1, float(hr[j]), float(hr[j + 1])))
+            except (TypeError, ValueError):
+                grid_hr.append(None)
+        else:
+            grid_hr.append(None)
+        if has_cad:
+            try:
+                v0, v1 = cadence[j], cadence[j + 1]
+                grid_cadence.append(_interp(target_m, x0, x1, float(v0), float(v1)) if v0 is not None and v1 is not None else None)
+            except (TypeError, ValueError):
+                grid_cadence.append(None)
+        else:
+            grid_cadence.append(None)
+
+    # moving pace per grid segment (min/km), stops excluded; lightly smoothed over ~9 points
+    seg_pace: list[float | None] = [None] * n
+    for i in range(1, n):
+        t0p, t1p = grid_moving_time[i - 1], grid_moving_time[i]
+        dd_km = grid_dist_km[i] - grid_dist_km[i - 1]
+        if t0p is None or t1p is None or dd_km <= 0:
+            continue
+        dt_min = (t1p - t0p) / 60.0
+        if dt_min <= 0:
+            continue
+        seg_pace[i] = dt_min / dd_km
+    if any(p is not None for p in seg_pace):
+        half = SMOOTHING_WINDOW_POINTS // 2
+        smoothed: list[float | None] = []
+        for i in range(n):
+            window = [p for p in seg_pace[max(0, i - half):min(n, i + half + 1)] if p is not None]
+            smoothed.append(round(sum(window) / len(window), 3) if window else None)
+        seg_pace = smoothed
+
+    # No smoothing for cadence: distance-based smoothing bleeds stop cadence (0 spm) into adjacent
+    # moving segments, producing impossible values like 86 spm at aid stations.
+    seg_cadence: list[float | None] = [round(v, 1) if v is not None else None for v in grid_cadence]
+
+    # per-km splits (elapsed time, stopped time shown separately); raw elevation preferred for D+/D-
+    ele_m = track.get("ele_raw_m") or track.get("ele_m")
+    splits: list[dict[str, Any]] = []
+    km = 1
+    prev_time = grid_time[0]
+    prev_moving = grid_moving_time[0]
+    prev_idx = 0
+    for i in range(1, n):
+        if grid_dist_km[i] >= km or i == n - 1:
+            t = grid_time[i]
+            mt = grid_moving_time[i]
+            if prev_time is not None and t is not None and grid_dist_km[i] > grid_dist_km[prev_idx]:
+                dur_s = t - prev_time
+                moving_s = (mt - prev_moving) if (mt is not None and prev_moving is not None) else dur_s
+                stopped_s = max(0.0, dur_s - moving_s)
+                d_km = grid_dist_km[i] - grid_dist_km[prev_idx]
+                hr_window = [h for h in grid_hr[prev_idx:i + 1] if h is not None]
+                gain = loss = None
+                if ele_m:
+                    gain = loss = 0.0
+                    for k in range(prev_idx + 1, i + 1):
+                        delta = ele_m[k] - ele_m[k - 1]
+                        if delta > 0:
+                            gain += delta
+                        else:
+                            loss -= delta
+                    gain = round(gain)
+                    loss = round(loss)
+                splits.append(
+                    {
+                        "km": km if grid_dist_km[i] >= km else round(grid_dist_km[i], 2),
+                        "duration_s": round(dur_s),
+                        "stopped_s": round(stopped_s),
+                        "pace_min_per_km": round(moving_s / 60.0 / d_km, 2),
+                        "avg_hr_bpm": round(sum(hr_window) / len(hr_window), 0) if hr_window else None,
+                        "d_plus_m": gain,
+                        "d_minus_m": loss,
+                    }
+                )
+            prev_time = grid_time[i]
+            prev_moving = grid_moving_time[i]
+            prev_idx = i
+            km += 1
+
+    # per-slope-bracket pace/HR (uses the track's slope at each grid point)
+    bracket_stats: list[dict[str, Any]] = []
+    slope_pct = track.get("slope_pct")
+    if slope_pct:
+        interval_km = float(track.get("interval_m", GRID_INTERVAL_M)) / 1000.0
+        brackets = slope_brackets_for(slope_pct)
+        for bracket_idx, (lo, hi, label) in enumerate(brackets):
+            paces: list[float] = []
+            hrs: list[float] = []
+            count = 0
+            for i in range(n):
+                if _bracket_index(slope_pct[i], brackets) == bracket_idx:
+                    count += 1
+                    if seg_pace[i] is not None:
+                        paces.append(seg_pace[i])
+                    if grid_hr[i] is not None:
+                        hrs.append(grid_hr[i])
+            if count == 0:
+                continue
+            bracket_stats.append(
+                {
+                    "label": label,
+                    "min_pct": lo,
+                    "max_pct": hi,
+                    "km": round(count * interval_km, 2),
+                    "avg_pace_min_per_km": round(sum(paces) / len(paces), 2) if paces else None,
+                    "avg_hr_bpm": round(sum(hrs) / len(hrs), 0) if hrs else None,
+                }
+            )
+
+    t0 = float(time_s[0])
+    grid_elapsed_s = [round(float(t) - t0) if t is not None else None for t in grid_time]
+
+    return {
+        "seg_pace": seg_pace,
+        "grid_hr": grid_hr,
+        "seg_cadence": seg_cadence,
+        "km_splits": splits,
+        "bracket_stats": bracket_stats,
+        "grid_elapsed_s": grid_elapsed_s,
+    }
+
+
 def compare_route_with_activity(track: dict[str, Any], streams: dict[str, Any]) -> dict[str, Any]:
     """Compare a planned route with an actual activity, aligned by cumulative distance.
 
@@ -543,152 +708,33 @@ def compare_route_with_activity(track: dict[str, Any], streams: dict[str, Any]) 
         else:
             si += 1
 
-    route_dist_km = track["dist_km"]
-    n = len(route_dist_km)
-    route_total_km = route_dist_km[-1]
+    route_total_km = track["dist_km"][-1]
     activity_total_km = float(dist_m[-1]) / 1000.0
-
     mismatch_pct = abs(activity_total_km - route_total_km) / route_total_km * 100.0 if route_total_km > 0 else 0.0
 
-    # time (elapsed + moving), HR and cadence at each route grid distance, interpolated over the activity distance stream
-    grid_time: list[float | None] = []
-    grid_moving_time: list[float | None] = []
-    grid_hr: list[float | None] = []
-    grid_cadence: list[float | None] = []
-    j = 0
-    has_hr = hr and len(hr) == len(dist_m)
-    has_cad = cadence and len(cadence) == len(dist_m)
-    for dk in route_dist_km:
-        target_m = dk * 1000.0
-        if target_m > dist_m[-1]:
-            grid_time.append(None)
-            grid_moving_time.append(None)
-            grid_hr.append(None)
-            grid_cadence.append(None)
-            continue
-        while j < len(dist_m) - 2 and dist_m[j + 1] < target_m:
-            j += 1
-        x0, x1 = float(dist_m[j]), float(dist_m[j + 1])
-        grid_time.append(_interp(target_m, x0, x1, float(time_s[j]), float(time_s[j + 1])))
-        if cum_moving_s is not None:
-            grid_moving_time.append(_interp(target_m, x0, x1, cum_moving_s[j], cum_moving_s[j + 1]))
-        else:
-            grid_moving_time.append(grid_time[-1])
-        if has_hr:
-            try:
-                grid_hr.append(_interp(target_m, x0, x1, float(hr[j]), float(hr[j + 1])))
-            except (TypeError, ValueError):
-                grid_hr.append(None)
-        else:
-            grid_hr.append(None)
-        if has_cad:
-            try:
-                v0, v1 = cadence[j], cadence[j + 1]
-                grid_cadence.append(_interp(target_m, x0, x1, float(v0), float(v1)) if v0 is not None and v1 is not None else None)
-            except (TypeError, ValueError):
-                grid_cadence.append(None)
-        else:
-            grid_cadence.append(None)
+    # Planned-vs-actual: activity time/HR/cadence/pace aligned onto the planned route grid.
+    planned = _grid_metrics(track, time_s, dist_m, hr, cadence, cum_moving_s)
+    seg_pace = planned["seg_pace"]
+    grid_hr = planned["grid_hr"]
+    seg_cadence = planned["seg_cadence"]
+    splits = planned["km_splits"]
+    bracket_stats = planned["bracket_stats"]
 
-    # moving pace per grid segment (min/km), stops excluded; lightly smoothed over ~9 points like elevation
-    seg_pace: list[float | None] = [None] * n
-    for i in range(1, n):
-        t0, t1 = grid_moving_time[i - 1], grid_moving_time[i]
-        dd_km = route_dist_km[i] - route_dist_km[i - 1]
-        if t0 is None or t1 is None or dd_km <= 0:
-            continue
-        dt_min = (t1 - t0) / 60.0
-        if dt_min <= 0:
-            continue
-        seg_pace[i] = dt_min / dd_km
-    valid = [p for p in seg_pace if p is not None]
-    if valid:
-        smoothed: list[float | None] = []
-        half = SMOOTHING_WINDOW_POINTS // 2
-        for i in range(n):
-            window = [p for p in seg_pace[max(0, i - half):min(n, i + half + 1)] if p is not None]
-            smoothed.append(round(sum(window) / len(window), 3) if window else None)
-        seg_pace = smoothed
-
-    # No smoothing for cadence: the 1 Hz stream resampled onto the 20 m grid is already smooth
-    # enough, and distance-based smoothing bleeds stop cadence (0 spm) into adjacent moving
-    # segments, producing impossible values like 86 spm at aid stations.
-    seg_cadence: list[float | None] = [round(v, 1) if v is not None else None for v in grid_cadence]
-
-    # per-km splits (elapsed time, stopped time shown separately)
-    # prefer raw elevation for gain/loss (smoothed version undercounts repeated short climbs)
-    ele_m = track.get("ele_raw_m") or track.get("ele_m")
-    splits: list[dict[str, Any]] = []
-    km = 1
-    prev_time = grid_time[0]
-    prev_moving = grid_moving_time[0]
-    prev_idx = 0
-    for i in range(1, n):
-        if route_dist_km[i] >= km or i == n - 1:
-            t = grid_time[i]
-            mt = grid_moving_time[i]
-            if prev_time is not None and t is not None and route_dist_km[i] > route_dist_km[prev_idx]:
-                dur_s = t - prev_time
-                moving_s = (mt - prev_moving) if (mt is not None and prev_moving is not None) else dur_s
-                stopped_s = max(0.0, dur_s - moving_s)
-                d_km = route_dist_km[i] - route_dist_km[prev_idx]
-                hr_window = [h for h in grid_hr[prev_idx:i + 1] if h is not None]
-                gain = loss = None
-                if ele_m:
-                    gain = loss = 0.0
-                    for k in range(prev_idx + 1, i + 1):
-                        delta = ele_m[k] - ele_m[k - 1]
-                        if delta > 0:
-                            gain += delta
-                        else:
-                            loss -= delta
-                    gain = round(gain)
-                    loss = round(loss)
-                splits.append(
-                    {
-                        "km": km if route_dist_km[i] >= km else round(route_dist_km[i], 2),
-                        "duration_s": round(dur_s),
-                        "stopped_s": round(stopped_s),
-                        "pace_min_per_km": round(moving_s / 60.0 / d_km, 2),
-                        "avg_hr_bpm": round(sum(hr_window) / len(hr_window), 0) if hr_window else None,
-                        "d_plus_m": gain,
-                        "d_minus_m": loss,
-                    }
-                )
-            prev_time = grid_time[i]
-            prev_moving = grid_moving_time[i]
-            prev_idx = i
-            km += 1
-
-    # per-slope-bracket pace/HR (uses the route's slope at each grid point)
-    bracket_stats: list[dict[str, Any]] = []
-    slope_pct = track.get("slope_pct")
-    if slope_pct:
-        interval_km = float(track.get("interval_m", GRID_INTERVAL_M)) / 1000.0
-        brackets = slope_brackets_for(slope_pct)
-        for bracket_idx, (lo, hi, label) in enumerate(brackets):
-            paces: list[float] = []
-            hrs: list[float] = []
-            count = 0
-            for i in range(n):
-                if _bracket_index(slope_pct[i], brackets) == bracket_idx:
-                    count += 1
-                    if seg_pace[i] is not None:
-                        paces.append(seg_pace[i])
-                    if grid_hr[i] is not None:
-                        hrs.append(grid_hr[i])
-            if count == 0:
-                continue
-            bracket_stats.append(
-                {
-                    "label": label,
-                    "min_pct": lo,
-                    "max_pct": hi,
-                    "km": round(count * interval_km, 2),
-                    "avg_pace_min_per_km": round(sum(paces) / len(paces), 2) if paces else None,
-                    "avg_hr_bpm": round(sum(hrs) / len(hrs), 0) if hrs else None,
-                }
-            )
+    # Activity-native analysis on the activity's own distance grid (used when the activity is the
+    # primary trace): full-length km splits, gradient histogram and per-bracket pace/HR.
+    activity_km_splits: list[dict[str, Any]] | None = None
+    activity_bracket_stats: list[dict[str, Any]] | None = None
+    activity_slope_histogram: list[dict[str, Any]] = []
+    try:
+        activity_track = process_streams(streams)["track"]
+        act = _grid_metrics(activity_track, time_s, dist_m, hr, cadence, cum_moving_s)
+        activity_km_splits = act["km_splits"]
+        activity_bracket_stats = act["bracket_stats"]
+        activity_slope_histogram = compute_slope_histogram(
+            activity_track.get("slope_pct"), float(activity_track.get("interval_m", GRID_INTERVAL_M))
+        )
+    except GPXProcessingError:
+        pass
 
     # actual polyline, downsampled to ~2000 points for the map overlay
     actual_latlng: list[list[float]] = []
@@ -699,11 +745,8 @@ def compare_route_with_activity(track: dict[str, Any], streams: dict[str, Any]) 
     total_elapsed_s = round(float(time_s[-1]) - float(time_s[0]))
     total_moving_s = round(cum_moving_s[-1]) if cum_moving_s is not None else total_elapsed_s
 
-    # Elapsed time at each route grid point, for a time-based x-axis on the frontend.
-    # During pauses, adjacent grid points have nearly identical elevation but a large time gap,
-    # so the elevation profile naturally appears flat during stops.
-    t0 = float(time_s[0])
-    grid_elapsed_s = [round(float(t) - t0) if t is not None else None for t in grid_time]
+    # Elapsed time at each planned-route grid point, for a time-based x-axis on the frontend.
+    grid_elapsed_s = planned["grid_elapsed_s"]
 
     time_series = _build_activity_time_series(
         time_s, dist_m, altitude, hr, cadence, latlng, filtered_moving
@@ -723,6 +766,9 @@ def compare_route_with_activity(track: dict[str, Any], streams: dict[str, Any]) 
         "cadence_spm": [round(c, 0) if c is not None else None for c in seg_cadence],
         "km_splits": splits,
         "bracket_stats": bracket_stats,
+        "activity_km_splits": activity_km_splits,
+        "activity_bracket_stats": activity_bracket_stats,
+        "activity_slope_histogram": activity_slope_histogram,
         "actual_latlng": actual_latlng,
         "grid_elapsed_s": grid_elapsed_s,
         "time_series": time_series,

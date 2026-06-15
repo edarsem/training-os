@@ -77,20 +77,23 @@ function clearBracketHighlight() {
 }
 
 function highlightBracketOnMap(bracket) {
-    if (!map || !currentTrack || !currentTrack.slope_pct) return;
+    // highlight on the primary trace: activity slope/positions when Strava is primary, else planned
+    const prof = (activeProfile && activeProfile.slope) ? activeProfile : currentTrack;
+    const slope = prof === currentTrack ? currentTrack?.slope_pct : activeProfile.slope;
+    if (!map || !prof || !slope) return;
     clearBracketHighlight();
-    if (plannedTraceVisible) trackPolyline.setStyle({ opacity: 0.25 });
+    if (plannedTraceVisible && trackPolyline) trackPolyline.setStyle({ opacity: 0.25 });
 
     const lo = bracket.min_pct;
     const hi = bracket.max_pct;
     const color = colorForSlope((lo + hi) / 2);
     const segments = [];
     let run = null;
-    for (let i = 0; i < currentTrack.n; i++) {
-        const s = currentTrack.slope_pct[i];
-        if (s >= lo && s <= hi) {
+    for (let i = 0; i < prof.n; i++) {
+        const s = slope[i];
+        if (s !== null && s >= lo && s <= hi) {
             if (!run) run = [];
-            run.push([currentTrack.lat[i], currentTrack.lng[i]]);
+            run.push([prof.lat[i], prof.lng[i]]);
         } else if (run) {
             if (run.length > 1) segments.push(run);
             run = null;
@@ -771,8 +774,12 @@ document.addEventListener('alpine:init', () => {
         renderHistogramChart() {
             const canvas = document.getElementById('histogram-chart');
             if (!canvas || !this.route) return;
+            if (histogramChart) { histogramChart.destroy(); histogramChart = null; }
+            // gradient distribution of the primary trace (activity when Strava is primary)
+            const source = (this.dataSource === 'strava' && this.comparison?.activity_slope_histogram?.length)
+                ? this.comparison.activity_slope_histogram : (this.route.slope_histogram || []);
             // steepest climbs at the top
-            const histogram = (this.route.slope_histogram || []).filter((b) => b.km > 0).reverse();
+            const histogram = source.filter((b) => b.km > 0).reverse();
 
             histogramChart = new Chart(canvas, {
                 type: 'bar',
@@ -875,25 +882,50 @@ document.addEventListener('alpine:init', () => {
         setDataSource(source) {
             this.dataSource = source;
             this.updateTraceVisibility();
-            // the elevation profile base (activity vs planned) follows the primary trace
+            // every analysis follows the primary trace: profile, histogram, km table, brackets, map
             if (elevationChart) this.setXAxisMode(this.xAxisMode);
+            this.renderHistogramChart();
+            this.renderKmMarkers();
+        },
+
+        // The km-split and gradient-bracket tables follow the primary trace: the activity's own
+        // (full-length) analysis when Strava is primary, the planned-vs-actual alignment otherwise.
+        displayKmSplits() {
+            const c = this.comparison;
+            if (!c) return [];
+            return (this.dataSource === 'strava' && c.activity_km_splits) ? c.activity_km_splits : c.km_splits;
+        },
+
+        displayBracketStats() {
+            const c = this.comparison;
+            if (!c) return [];
+            return (this.dataSource === 'strava' && c.activity_bracket_stats) ? c.activity_bracket_stats : c.bracket_stats;
         },
 
         renderKmMarkers() {
-            if (!map || !currentTrack) return;
+            if (!map) return;
             kmMarkers.forEach((m) => map.removeLayer(m));
             kmMarkers = [];
-            const totalKm = currentTrack.dist_km[currentTrack.n - 1];
-            const intervalKm = (currentTrack.interval_m || 20) / 1000;
+            // km marks along the primary trace (the activity when Strava is primary, else planned)
+            const lat = activeProfile ? activeProfile.lat : currentTrack?.lat;
+            const lng = activeProfile ? activeProfile.lng : currentTrack?.lng;
+            const distKm = activeProfile ? activeProfile.distKm : currentTrack?.dist_km;
+            const cnt = activeProfile ? activeProfile.n : currentTrack?.n;
+            if (!lat || !distKm) return;
+            const totalKm = distKm[cnt - 1];
             for (let km = 1; km <= Math.floor(totalKm); km++) {
-                const idx = Math.min(currentTrack.n - 1, Math.max(0, Math.round(km / intervalKm)));
+                let idx = 0, best = Infinity;
+                for (let i = 0; i < cnt; i++) {
+                    const dd = Math.abs(distKm[i] - km);
+                    if (dd < best) { best = dd; idx = i; }
+                }
                 const icon = L.divIcon({
                     className: '',
                     html: `<div style="background:rgba(255,255,255,0.85);border:1px solid #9ca3af;border-radius:8px;padding:1px 4px;font-size:9px;font-weight:700;color:#374151;white-space:nowrap;">${km}</div>`,
                     iconSize: null,
                     iconAnchor: [8, 8],
                 });
-                const m = L.marker([currentTrack.lat[idx], currentTrack.lng[idx]], { icon, interactive: false, zIndexOffset: -200 });
+                const m = L.marker([lat[idx], lng[idx]], { icon, interactive: false, zIndexOffset: -200 });
                 m.addTo(map);
                 kmMarkers.push(m);
             }
@@ -1001,6 +1033,12 @@ document.addEventListener('alpine:init', () => {
                 const data = await res.json();
                 if (!res.ok) throw new Error(data?.detail || 'Match failed');
                 this.route.session_id = data.session_id;
+                // linking adopts the Strava activity's name and (appended) description
+                if (data.route_name) this.route.name = data.route_name;
+                if (data.route_notes !== undefined && data.route_notes !== null) {
+                    this.route.notes = data.route_notes;
+                    this.routeNotes = data.route_notes;
+                }
                 this.applyComparison(data);
             } catch (e) {
                 this.matchError = e?.message || 'Match failed';
@@ -1024,13 +1062,17 @@ document.addEventListener('alpine:init', () => {
             this.comparison = data;
             if (this.hasPlannedTrace()) this.dataSource = 'strava';
             cumulativeTimeS = data.grid_elapsed_s || buildCumulativeTime(data, currentTrack);
-            if (data.km_splits) {
-                this.stravaElevGain = data.km_splits.reduce((s, k) => s + (k.d_plus_m || 0), 0);
-                this.stravaElevLoss = data.km_splits.reduce((s, k) => s + (k.d_minus_m || 0), 0);
+            // activity's own elevation totals (full length) when available
+            const elevSplits = data.activity_km_splits || data.km_splits;
+            if (elevSplits) {
+                this.stravaElevGain = elevSplits.reduce((s, k) => s + (k.d_plus_m || 0), 0);
+                this.stravaElevLoss = elevSplits.reduce((s, k) => s + (k.d_minus_m || 0), 0);
             }
             this.$nextTick(() => {
                 this.renderActualPolyline();
-                this.updateOverlayData();
+                this.updateOverlayData();   // rebuilds activeProfile to the primary trace
+                this.renderHistogramChart();
+                this.renderKmMarkers();
             });
         },
 

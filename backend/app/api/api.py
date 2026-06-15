@@ -689,6 +689,8 @@ def _build_comparison_response(route: models.Route, session: models.Session) -> 
         session_date=session.date,
         session_type=session.type,
         session_name=name,
+        route_name=route.name,
+        route_notes=route.notes,
         **comparison,
     )
 
@@ -723,6 +725,32 @@ def _ensure_session_gps_streams(session: models.Session) -> dict | None:
     return detail if isinstance(detail, dict) else None
 
 
+def _fetch_activity_detail_for_session(session: models.Session) -> dict | None:
+    """Best-effort fetch of the Strava activity detail for a session (non-fatal)."""
+    try:
+        client = StravaClient()
+        activity = _find_strava_activity_for_session(client, session)
+        if activity is not None and activity.get("id") is not None:
+            return client.get_activity_by_id(int(activity["id"])).get("activity")
+    except (StravaConfigError, StravaAPIError, HTTPException):
+        pass
+    return None
+
+
+def _strava_name_and_description(session: models.Session, activity_detail: dict | None) -> tuple[str | None, str | None]:
+    """Derive a display name and description from the Strava activity, falling back to the
+    session notes (first line = name, the rest = description)."""
+    name = description = None
+    if activity_detail:
+        name = str(activity_detail.get("name") or "").strip() or None
+        description = str(activity_detail.get("description") or "").strip() or None
+    if not name and session.notes:
+        name = str(session.notes).splitlines()[0].strip() or None
+    if not description and session.notes:
+        description = "\n".join(str(session.notes).splitlines()[1:]).strip() or None
+    return name, description
+
+
 @router.post("/routes/from-session", response_model=schemas.RouteDetailResponse)
 def create_route_from_session(payload: schemas.RouteMatchRequest, db: Session = Depends(get_db)):
     """Create a route directly from a Strava activity (analysis mode): the activity's GPS track becomes the route."""
@@ -739,14 +767,8 @@ def create_route_from_session(payload: schemas.RouteMatchRequest, db: Session = 
 
     activity_detail = _ensure_session_gps_streams(session)
     if activity_detail is None:
-        # streams were already stored; still try to get the activity description (non-fatal)
-        try:
-            client = StravaClient()
-            activity = _find_strava_activity_for_session(client, session)
-            if activity is not None and activity.get("id") is not None:
-                activity_detail = client.get_activity_by_id(int(activity["id"])).get("activity")
-        except (StravaConfigError, StravaAPIError, HTTPException):
-            activity_detail = None
+        # streams were already stored; still try to get the activity name/description (non-fatal)
+        activity_detail = _fetch_activity_detail_for_session(session)
 
     streams = json.loads(session.gps_stream_json)
 
@@ -755,16 +777,7 @@ def create_route_from_session(payload: schemas.RouteMatchRequest, db: Session = 
     except GPXProcessingError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
-    name = None
-    description = None
-    if activity_detail:
-        name = str(activity_detail.get("name") or "").strip() or None
-        description = str(activity_detail.get("description") or "").strip() or None
-    if not name and session.notes:
-        name = str(session.notes).splitlines()[0].strip() or None
-    if not description and session.notes:
-        lines = str(session.notes).splitlines()
-        description = "\n".join(lines[1:]).strip() or None
+    name, description = _strava_name_and_description(session, activity_detail)
     if not name:
         name = f"{session.type} {session.date}"
 
@@ -813,7 +826,20 @@ def match_route_session(route_id: int, payload: schemas.RouteMatchRequest, db: S
     if not session:
         raise HTTPException(status_code=404, detail=f"Session {payload.session_id} not found")
 
-    _ensure_session_gps_streams(session)
+    activity_detail = _ensure_session_gps_streams(session)
+    if activity_detail is None:
+        activity_detail = _fetch_activity_detail_for_session(session)
+
+    # Adopt the Strava activity's name and description (as when creating a route from an activity).
+    name, description = _strava_name_and_description(session, activity_detail)
+    if name:
+        route.name = name
+    if description:
+        existing = (route.notes or "").strip()
+        if not existing:
+            route.notes = description
+        elif description not in existing:
+            route.notes = f"{existing}\n\n— Strava —\n{description}"
 
     route.session_id = session.id
     db.commit()

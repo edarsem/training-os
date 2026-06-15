@@ -284,7 +284,7 @@
                                         </tr>
                                     </thead>
                                     <tbody>
-                                        <template x-for="s in comparison.km_splits" :key="s.km">
+                                        <template x-for="s in displayKmSplits()" :key="s.km">
                                             <tr class="border-b border-gray-100">
                                                 <td class="py-1 pr-3" x-text="s.km"></td>
                                                 <td class="py-1 pr-3" x-text="formatSplitTime(s.duration_s)"></td>
@@ -312,7 +312,7 @@
                                         </tr>
                                     </thead>
                                     <tbody>
-                                        <template x-for="b in comparison.bracket_stats" :key="b.label">
+                                        <template x-for="b in displayBracketStats()" :key="b.label">
                                             <tr class="border-b border-gray-100">
                                                 <td class="py-1 pr-3" x-text="b.label"></td>
                                                 <td class="py-1 pr-3" x-text="b.km"></td>

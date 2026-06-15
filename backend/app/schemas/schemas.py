@@ -290,6 +290,8 @@ class RouteComparisonResponse(BaseModel):
     session_date: Optional[date] = None
     session_type: Optional[str] = None
     session_name: Optional[str] = None
+    route_name: Optional[str] = None
+    route_notes: Optional[str] = None
     route_distance_km: float
     activity_distance_km: float
     distance_mismatch_pct: float
@@ -303,6 +305,9 @@ class RouteComparisonResponse(BaseModel):
     cadence_spm: List[Optional[float]] = Field(default_factory=list)
     km_splits: List[dict[str, Any]] = Field(default_factory=list)
     bracket_stats: List[dict[str, Any]] = Field(default_factory=list)
+    activity_km_splits: Optional[List[dict[str, Any]]] = None
+    activity_bracket_stats: Optional[List[dict[str, Any]]] = None
+    activity_slope_histogram: List[dict[str, Any]] = Field(default_factory=list)
     actual_latlng: List[List[float]] = Field(default_factory=list)
     grid_elapsed_s: List[Optional[int]] = Field(default_factory=list)
     time_series: Optional[dict[str, Any]] = None
