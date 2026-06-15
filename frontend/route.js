@@ -17,6 +17,11 @@ let kmMarkers = [];
 let pinnedDot = null;
 let pinnedTrackIdx = null;
 let cumulativeTimeS = null;
+// The profile/overlay arrays the elevation chart currently renders. In 'distance' mode this is
+// a view over currentTrack + comparison overlays (20 m grid); in 'time' mode it is the activity's
+// time-sampled series (comparison.time_series), which represents pauses as flat plateaus.
+// Hover/pin indices are indices into activeProfile, not currentTrack.
+let activeProfile = null;
 
 const SLOPE_COLORS = [
     { max: -40, color: '#172554' },
@@ -63,6 +68,7 @@ function destroyVisuals() {
     pinnedDot = null;
     pinnedTrackIdx = null;
     cumulativeTimeS = null;
+    activeProfile = null;
 }
 
 function clearBracketHighlight() {
@@ -97,23 +103,45 @@ function highlightBracketOnMap(bracket) {
     ).addTo(map);
 }
 
-function nearestTrackIndex(lat, lng) {
-    if (!currentTrack) return 0;
+function nearestProfileIndex(lat, lng) {
+    if (!activeProfile) return 0;
     let best = 0;
     let bestDist = Infinity;
-    for (let i = 0; i < currentTrack.n; i++) {
-        const dLat = currentTrack.lat[i] - lat;
-        const dLng = (currentTrack.lng[i] - lng) * Math.cos(lat * Math.PI / 180);
+    const la = activeProfile.lat;
+    const lo = activeProfile.lng;
+    for (let i = 0; i < activeProfile.n; i++) {
+        if (la[i] == null || lo[i] == null) continue;
+        const dLat = la[i] - lat;
+        const dLng = (lo[i] - lng) * Math.cos(lat * Math.PI / 180);
         const d = dLat * dLat + dLng * dLng;
         if (d < bestDist) { bestDist = d; best = i; }
     }
     return best;
 }
 
+function profileIndexForDistance(distKm) {
+    if (!activeProfile) return 0;
+    const d = Number(distKm);
+    let best = 0;
+    let bestDiff = Infinity;
+    for (let i = 0; i < activeProfile.n; i++) {
+        const diff = Math.abs(activeProfile.distKm[i] - d);
+        if (diff < bestDiff) { bestDiff = diff; best = i; }
+    }
+    return best;
+}
+
+function xyData(yArr) {
+    if (!activeProfile || !yArr) return [];
+    const out = [];
+    for (let i = 0; i < activeProfile.n; i++) out.push({ x: activeProfile.x[i], y: yArr[i] ?? null });
+    return out;
+}
+
 function showHoverAtIndex(index) {
-    if (!currentTrack || index === null || index < 0 || index >= currentTrack.n) return;
-    if (hoverDot) {
-        hoverDot.setLatLng([currentTrack.lat[index], currentTrack.lng[index]]);
+    if (!activeProfile || index === null || index < 0 || index >= activeProfile.n) return;
+    if (hoverDot && activeProfile.lat[index] != null) {
+        hoverDot.setLatLng([activeProfile.lat[index], activeProfile.lng[index]]);
         hoverDot.setStyle({ opacity: 1, fillOpacity: 1 });
     }
 }
@@ -155,8 +183,9 @@ function buildCumulativeTime(comparison, track) {
 }
 
 function showPinnedAtIndex(idx) {
-    if (!currentTrack || idx === null || idx < 0 || idx >= currentTrack.n) return;
-    const latlng = [currentTrack.lat[idx], currentTrack.lng[idx]];
+    if (!activeProfile || idx === null || idx < 0 || idx >= activeProfile.n) return;
+    if (activeProfile.lat[idx] == null) return;
+    const latlng = [activeProfile.lat[idx], activeProfile.lng[idx]];
     if (pinnedDot) {
         pinnedDot.setLatLng(latlng);
     } else if (map) {
@@ -166,15 +195,11 @@ function showPinnedAtIndex(idx) {
     }
 }
 
-function buildStopPositions(kmSplits) {
-    if (!kmSplits) return [];
-    const sorted = [...kmSplits].sort((a, b) => a.km - b.km);
-    let cum = 0;
-    const kmCum = { 0: 0 };
-    for (const s of sorted) { cum += (s.duration_s || 0); kmCum[s.km] = cum; }
-    return sorted
-        .filter((s) => (s.stopped_s || 0) >= 15)
-        .map((s) => ({ km: s.km, stopped_s: s.stopped_s, time_s: kmCum[s.km] ?? null }));
+function buildStopPositions(stops) {
+    // Real stop segments from the backend, anchored by actual elapsed time + distance. The backend
+    // already applies the single MIN_STOP_DURATION_S threshold, so every stop here is also counted
+    // in the km-split stopped time — map/profile and table stay in sync.
+    return stops || [];
 }
 
 const stopLinesPlugin = {
@@ -192,10 +217,10 @@ const stopLinesPlugin = {
         ctx.save();
         ctx.lineWidth = 1.5;
         for (const stop of stops) {
-            const label = fmtStop(stop.stopped_s);
-            if (useTime && stop.time_s !== null) {
-                const xEnd = xAxis.getPixelForValue(stop.time_s);
-                const xStart = xAxis.getPixelForValue(stop.time_s - stop.stopped_s);
+            const label = fmtStop(stop.duration_s);
+            if (useTime && stop.t_start_s !== undefined) {
+                const xEnd = xAxis.getPixelForValue(stop.t_end_s);
+                const xStart = xAxis.getPixelForValue(stop.t_start_s);
                 ctx.fillStyle = 'rgba(234, 179, 8, 0.12)';
                 ctx.fillRect(xStart, top, xEnd - xStart, bottom - top);
                 ctx.beginPath();
@@ -211,7 +236,7 @@ const stopLinesPlugin = {
                 ctx.fillStyle = 'rgba(161, 98, 7, 0.9)';
                 ctx.fillText(label, (xStart + xEnd) / 2, top + 3);
             } else if (!useTime) {
-                const x = xAxis.getPixelForValue(stop.km);
+                const x = xAxis.getPixelForValue(stop.dist_km);
                 ctx.beginPath();
                 ctx.setLineDash([3, 4]);
                 ctx.strokeStyle = 'rgba(234, 179, 8, 0.7)';
@@ -484,7 +509,7 @@ document.addEventListener('alpine:init', () => {
             }).addTo(map);
 
             map.on('mousemove', (e) => {
-                const idx = nearestTrackIndex(e.latlng.lat, e.latlng.lng);
+                const idx = nearestProfileIndex(e.latlng.lat, e.latlng.lng);
                 showHoverAtIndex(idx);
                 if (elevationChart) {
                     elevationChart.setActiveElements([{ datasetIndex: 0, index: idx }]);
@@ -495,7 +520,7 @@ document.addEventListener('alpine:init', () => {
             map.on('mouseout', hideHover);
             map.on('click', (e) => {
                 if (pinnedTrackIdx !== null) { this.clearPinned(); return; }
-                const idx = nearestTrackIndex(e.latlng.lat, e.latlng.lng);
+                const idx = nearestProfileIndex(e.latlng.lat, e.latlng.lng);
                 this.setPinned(idx);
             });
 
@@ -533,24 +558,23 @@ document.addEventListener('alpine:init', () => {
         renderElevationChart() {
             const canvas = document.getElementById('elevation-chart');
             if (!canvas || !currentTrack || !currentTrack.ele_m) return;
-            const track = currentTrack;
+            this.rebuildActiveProfile();
             const self = this;
 
             elevationChart = new Chart(canvas, {
                 type: 'line',
                 data: {
-                    labels: track.dist_km,
                     datasets: [
                         {
                             label: 'Elevation (m)',
-                            data: track.ele_m,
+                            data: xyData(activeProfile.ele),
                             pointRadius: 0,
                             borderWidth: 3,
                             fill: true,
                             backgroundColor: 'rgba(148, 163, 184, 0.15)',
                             tension: 0.1,
                             segment: {
-                                borderColor: (ctx) => colorForSlope(track.slope_pct[ctx.p1DataIndex] ?? 0),
+                                borderColor: (ctx) => colorForSlope(activeProfile?.slope?.[ctx.p1DataIndex] ?? 0),
                             },
                         },
                         {
@@ -618,6 +642,12 @@ document.addEventListener('alpine:init', () => {
                         if (points.length > 0) showHoverAtIndex(points[0].index);
                     },
                     onClick: (event, elements, chart) => {
+                        const markerHits = chart.getElementsAtEventForMode(event, 'point', { intersect: true }, true)
+                            .filter((el) => el.datasetIndex === 1);
+                        if (markerHits.length > 0) {
+                            const md = chart.data.datasets[1].data[markerHits[0].index];
+                            if (md?.marker) { self.editMarker(md.marker); return; }
+                        }
                         if (pinnedTrackIdx !== null) { self.clearPinned(); return; }
                         const points = chart.getElementsAtEventForMode(event, 'index', { intersect: false }, true);
                         if (points.length > 0) self.setPinned(points[0].index);
@@ -627,7 +657,7 @@ document.addEventListener('alpine:init', () => {
                             type: 'linear',
                             title: { display: true, text: 'Distance (km)' },
                             min: 0,
-                            max: track.dist_km[track.dist_km.length - 1],
+                            max: activeProfile.x[activeProfile.n - 1],
                         },
                         y: { title: { display: true, text: 'Elevation (m)' } },
                         pace: {
@@ -655,19 +685,16 @@ document.addEventListener('alpine:init', () => {
                             callbacks: {
                                 title: (items) => {
                                     const idx = items[0].dataIndex;
-                                    if (self.xAxisMode === 'time' && cumulativeTimeS && idx !== undefined) {
-                                        const t = cumulativeTimeS[idx];
-                                        const km = currentTrack?.dist_km[idx];
-                                        let title = t != null ? self.formatSplitTime(Math.round(t)) : '—';
+                                    const km = activeProfile?.distKm?.[idx];
+                                    const t = activeProfile?.timeS?.[idx];
+                                    const tStr = t != null ? self.formatSplitTime(Math.round(t)) : null;
+                                    if (self.xAxisMode === 'time') {
+                                        let title = tStr ?? '—';
                                         if (km != null) title += ` · km ${Number(km).toFixed(2)}`;
                                         return title;
                                     }
-                                    const distKm = Number(items[0].parsed.x);
-                                    let title = `km ${distKm.toFixed(2)}`;
-                                    if (cumulativeTimeS && idx !== undefined) {
-                                        const t = cumulativeTimeS[idx];
-                                        if (t != null) title += ` · ${self.formatSplitTime(Math.round(t))}`;
-                                    }
+                                    let title = km != null ? `km ${Number(km).toFixed(2)}` : '—';
+                                    if (tStr) title += ` · ${tStr}`;
                                     return title;
                                 },
                                 label: (item) => {
@@ -679,7 +706,7 @@ document.addEventListener('alpine:init', () => {
                                     if (item.datasetIndex === 3) return `HR ${Math.round(item.parsed.y)} bpm`;
                                     if (item.datasetIndex === 4) return `Cadence ${Math.round(item.parsed.y)} spm`;
                                     if (item.datasetIndex === 5) return null;
-                                    const slope = Math.round(track.slope_pct[item.dataIndex]);
+                                    const slope = Math.round(activeProfile?.slope?.[item.dataIndex] ?? 0);
                                     return `${Math.round(item.parsed.y)} m · ${slope > 0 ? '+' : ''}${slope}%`;
                                 },
                                 afterBody: (items) => {
@@ -687,15 +714,18 @@ document.addEventListener('alpine:init', () => {
                                     if (pinnedTrackIdx === null || pinnedTrackIdx === hoverIdx) return [];
                                     const p = pinnedTrackIdx;
                                     const lines = ['─────────'];
-                                    if (self.xAxisMode === 'time' && cumulativeTimeS?.[p] != null) {
-                                        lines.push(`📍 ${self.formatSplitTime(Math.round(cumulativeTimeS[p]))} · km ${Number(track.dist_km[p]).toFixed(2)}`);
+                                    const t = activeProfile?.timeS?.[p];
+                                    const km = activeProfile?.distKm?.[p];
+                                    const tStr = t != null ? self.formatSplitTime(Math.round(t)) : null;
+                                    if (self.xAxisMode === 'time') {
+                                        lines.push(`📍 ${tStr ?? '—'}${km != null ? ` · km ${Number(km).toFixed(2)}` : ''}`);
                                     } else {
-                                        lines.push(`📍 km ${Number(track.dist_km[p]).toFixed(2)}`);
-                                        if (cumulativeTimeS?.[p] != null) lines.push(`   ${self.formatSplitTime(Math.round(cumulativeTimeS[p]))}`);
+                                        lines.push(`📍 km ${km != null ? Number(km).toFixed(2) : '—'}`);
+                                        if (tStr) lines.push(`   ${tStr}`);
                                     }
-                                    if (track.ele_m && track.slope_pct) {
-                                        const sl = Math.round(track.slope_pct[p]);
-                                        lines.push(`   ${Math.round(track.ele_m[p])} m · ${sl > 0 ? '+' : ''}${sl}%`);
+                                    if (activeProfile?.ele && activeProfile?.slope) {
+                                        const sl = Math.round(activeProfile.slope[p]);
+                                        lines.push(`   ${Math.round(activeProfile.ele[p])} m · ${sl > 0 ? '+' : ''}${sl}%`);
                                     }
                                     return lines;
                                 },
@@ -710,13 +740,15 @@ document.addEventListener('alpine:init', () => {
         },
 
         updateMarkerOverlayDataset() {
-            if (!elevationChart || !currentTrack || !currentTrack.ele_m) return;
-            const intervalKm = (currentTrack.interval_m || 20) / 1000;
-            const useTime = this.xAxisMode === 'time' && !!cumulativeTimeS;
+            if (!elevationChart || !activeProfile || !activeProfile.ele) return;
+            // Markers are anchored to the planned route's distance. In time mode the x-axis is the
+            // activity, whose distance scale drifts from the plan (different path length), so match
+            // by geography instead of distance number — otherwise a ravito lands ~400 m off.
             const data = (this.route?.markers || []).map((m) => {
-                const idx = Math.min(currentTrack.n - 1, Math.max(0, Math.round(Number(m.distance_km) / intervalKm)));
-                const xVal = useTime ? (cumulativeTimeS[idx] ?? Number(m.distance_km)) : Number(m.distance_km);
-                return { x: xVal, y: currentTrack.ele_m[idx], marker: m };
+                const idx = (activeProfile.mode === 'time' && m.lat != null && m.lng != null)
+                    ? nearestProfileIndex(Number(m.lat), Number(m.lng))
+                    : profileIndexForDistance(Number(m.distance_km));
+                return { x: activeProfile.x[idx], y: activeProfile.ele[idx], marker: m };
             });
             elevationChart.data.datasets[1].data = data;
             elevationChart.update('none');
@@ -776,25 +808,27 @@ document.addEventListener('alpine:init', () => {
         },
 
         setPinned(idx) {
-            if (!currentTrack || idx === null || idx < 0 || idx >= currentTrack.n) return;
+            if (!activeProfile || idx === null || idx < 0 || idx >= activeProfile.n) return;
             pinnedTrackIdx = idx;
-            this.pinnedDistanceKm = Number(currentTrack.dist_km[idx]).toFixed(2);
+            this.pinnedDistanceKm = Number(activeProfile.distKm[idx]).toFixed(2);
             showPinnedAtIndex(idx);
-            const paceArr = this.comparison?.pace_min_per_km;
-            const hrArr = this.comparison?.hr_bpm;
-            const cadArr = this.comparison?.cadence_spm;
+            if (map && activeProfile.lat[idx] != null) {
+                const latlng = L.latLng(activeProfile.lat[idx], activeProfile.lng[idx]);
+                if (!map.getBounds().contains(latlng)) map.panTo(latlng);
+            }
+            const paceArr = activeProfile.pace;
+            const hrArr = activeProfile.hr;
+            const cadArr = activeProfile.cad;
             this.pinnedInfo = {
-                time: cumulativeTimeS?.[idx] != null ? Math.round(cumulativeTimeS[idx]) : null,
-                elevation: currentTrack.ele_m ? Math.round(currentTrack.ele_m[idx]) : null,
-                slope: currentTrack.slope_pct ? Math.round(currentTrack.slope_pct[idx]) : null,
+                time: activeProfile.timeS?.[idx] != null ? Math.round(activeProfile.timeS[idx]) : null,
+                elevation: activeProfile.ele ? Math.round(activeProfile.ele[idx]) : null,
+                slope: activeProfile.slope ? Math.round(activeProfile.slope[idx]) : null,
                 pace: paceArr?.[idx] != null && isFinite(paceArr[idx]) ? paceArr[idx] : null,
                 hr: hrArr?.[idx] != null ? Math.round(hrArr[idx]) : null,
                 cadence: cadArr?.[idx] != null ? Math.round(cadArr[idx]) : null,
             };
-            if (elevationChart && currentTrack.ele_m) {
-                const pinX = (this.xAxisMode === 'time' && cumulativeTimeS?.[idx] != null)
-                    ? cumulativeTimeS[idx] : currentTrack.dist_km[idx];
-                elevationChart.data.datasets[5].data = [{ x: pinX, y: currentTrack.ele_m[idx] }];
+            if (elevationChart && activeProfile.ele) {
+                elevationChart.data.datasets[5].data = [{ x: activeProfile.x[idx], y: activeProfile.ele[idx] }];
                 elevationChart.setActiveElements([{ datasetIndex: 0, index: idx }]);
                 elevationChart.tooltip.setActiveElements([{ datasetIndex: 0, index: idx }], { x: 0, y: 0 });
                 elevationChart.update('none');
@@ -815,8 +849,8 @@ document.addEventListener('alpine:init', () => {
         },
 
         openNoteAtPinned() {
-            if (pinnedTrackIdx === null || !currentTrack || !this.route) return;
-            this.openMarkerForm('note', currentTrack.dist_km[pinnedTrackIdx]);
+            if (pinnedTrackIdx === null || !activeProfile || !this.route) return;
+            this.openMarkerForm('note', activeProfile.distKm[pinnedTrackIdx]);
         },
 
         setDataSource(source) {
@@ -968,7 +1002,7 @@ document.addEventListener('alpine:init', () => {
         applyComparison(data) {
             this.comparison = data;
             if (this.hasPlannedTrace()) this.dataSource = 'strava';
-            cumulativeTimeS = buildCumulativeTime(data, currentTrack);
+            cumulativeTimeS = data.grid_elapsed_s || buildCumulativeTime(data, currentTrack);
             if (data.km_splits) {
                 this.stravaElevGain = data.km_splits.reduce((s, k) => s + (k.d_plus_m || 0), 0);
                 this.stravaElevLoss = data.km_splits.reduce((s, k) => s + (k.d_minus_m || 0), 0);
@@ -1032,33 +1066,62 @@ document.addEventListener('alpine:init', () => {
             }
         },
 
+        rebuildActiveProfile() {
+            const ts = this.comparison?.time_series;
+            if (this.xAxisMode === 'time' && ts && ts.n) {
+                activeProfile = {
+                    mode: 'time', n: ts.n,
+                    x: ts.t_s, ele: ts.ele_m, slope: ts.slope_pct,
+                    lat: ts.lat, lng: ts.lng, distKm: ts.dist_km, timeS: ts.t_s,
+                    pace: ts.pace_min_per_km, hr: ts.hr_bpm, cad: ts.cadence_spm,
+                };
+            } else {
+                const t = currentTrack;
+                activeProfile = {
+                    mode: 'distance', n: t.n,
+                    x: t.dist_km, ele: t.ele_m, slope: t.slope_pct,
+                    lat: t.lat, lng: t.lng, distKm: t.dist_km, timeS: cumulativeTimeS,
+                    pace: this.comparison?.pace_min_per_km, hr: this.comparison?.hr_bpm, cad: this.comparison?.cadence_spm,
+                };
+            }
+        },
+
         updateOverlayData() {
             if (!elevationChart) return;
             if (!this.comparison) this.xAxisMode = 'distance';
-            elevationChart.data.datasets[2].data = this.comparison ? this.comparison.pace_min_per_km : [];
-            elevationChart.data.datasets[3].data = this.comparison ? this.comparison.hr_bpm : [];
-            elevationChart.data.datasets[4].data = this.comparison ? this.comparison.cadence_spm : [];
-            elevationChart.$stopPositions = buildStopPositions(this.comparison?.km_splits);
+            elevationChart.$stopPositions = buildStopPositions(this.comparison?.stops);
             this.setXAxisMode(this.xAxisMode);
         },
 
         setXAxisMode(mode) {
             if (!elevationChart || !currentTrack) return;
-            const useTime = mode === 'time' && !!cumulativeTimeS;
+            // capture the pinned point's geographic position before the profile (and its index
+            // space) changes, so we can re-anchor it by location rather than by distance number
+            const pinnedGeo = (pinnedTrackIdx !== null && activeProfile && activeProfile.lat?.[pinnedTrackIdx] != null)
+                ? { lat: activeProfile.lat[pinnedTrackIdx], lng: activeProfile.lng[pinnedTrackIdx] } : null;
+            const useTime = mode === 'time' && !!this.comparison?.time_series?.n;
             this.xAxisMode = useTime ? 'time' : 'distance';
-            const labels = useTime ? cumulativeTimeS : currentTrack.dist_km;
-            elevationChart.data.labels = labels;
+            this.rebuildActiveProfile();
+            elevationChart.data.datasets[0].data = xyData(activeProfile.ele);
+            elevationChart.data.datasets[2].data = activeProfile.pace ? xyData(activeProfile.pace) : [];
+            elevationChart.data.datasets[3].data = activeProfile.hr ? xyData(activeProfile.hr) : [];
+            elevationChart.data.datasets[4].data = activeProfile.cad ? xyData(activeProfile.cad) : [];
             elevationChart.$xAxisMode = this.xAxisMode;
             const xAxis = elevationChart.options.scales.x;
-            xAxis.max = labels[labels.length - 1];
+            xAxis.max = activeProfile.x[activeProfile.n - 1];
             xAxis.title.text = useTime ? 'Time' : 'Distance (km)';
             xAxis.ticks = useTime
                 ? { callback: (val) => this.formatSplitTime(Math.round(val)) }
                 : {};
             this.updateMarkerOverlayDataset();
-            if (pinnedTrackIdx !== null && currentTrack.ele_m) {
-                const xVal = useTime ? (cumulativeTimeS[pinnedTrackIdx] ?? null) : currentTrack.dist_km[pinnedTrackIdx];
-                if (xVal !== null) elevationChart.data.datasets[5].data = [{ x: xVal, y: currentTrack.ele_m[pinnedTrackIdx] }];
+            // the pinned index lives in the previous mode's index space; re-anchor it by geography
+            // (location is stable across modes; the distance number is not, planned vs activity)
+            if (pinnedTrackIdx !== null && activeProfile.ele) {
+                pinnedTrackIdx = pinnedGeo
+                    ? nearestProfileIndex(pinnedGeo.lat, pinnedGeo.lng)
+                    : profileIndexForDistance(this.pinnedDistanceKm);
+                showPinnedAtIndex(pinnedTrackIdx);
+                elevationChart.data.datasets[5].data = [{ x: activeProfile.x[pinnedTrackIdx], y: activeProfile.ele[pinnedTrackIdx] }];
             }
             this.updateOverlayVisibility();
         },

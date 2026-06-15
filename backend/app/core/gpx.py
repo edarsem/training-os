@@ -104,6 +104,155 @@ def _rolling_mean(values: list[float], window: int) -> list[float]:
     return out
 
 
+def _smooth_optional(values: list[float | None], window: int) -> list[float | None]:
+    """Centered rolling mean that skips None entries (gaps stay None)."""
+    half = window // 2
+    n = len(values)
+    out: list[float | None] = []
+    for i in range(n):
+        w = [v for v in values[max(0, i - half):min(n, i + half + 1)] if v is not None]
+        out.append(sum(w) / len(w) if w else None)
+    return out
+
+
+def _detect_moving(time_s: list[Any], dist_m: list[Any], stop_speed_ms: float, min_stop_s: float) -> list[bool]:
+    """Per-sample moving flags from interval speed (distance gained / time elapsed).
+
+    moving[i] describes the interval (i-1, i]. This is robust to devices that drop samples
+    during auto-pause: a stationary period shows up as a single low-speed interval with a large
+    time gap, whereas cadence/velocity at the gap boundaries still read as 'running' (so
+    cadence-based detection misses these pauses entirely). Stop runs shorter than min_stop_s
+    (GPS jitter, momentary slow-downs) are merged back to moving.
+    """
+    n = len(time_s)
+    moving = [True] * n
+    for i in range(1, n):
+        dt = float(time_s[i]) - float(time_s[i - 1])
+        dd = float(dist_m[i]) - float(dist_m[i - 1])
+        moving[i] = dt > 0 and (dd / dt) >= stop_speed_ms
+    i = 1
+    while i < n:
+        if not moving[i]:
+            j = i
+            while j < n and not moving[j]:
+                j += 1
+            if float(time_s[j - 1]) - float(time_s[i - 1]) < min_stop_s:
+                for k in range(i, j):
+                    moving[k] = True
+            i = j
+        else:
+            i += 1
+    return moving
+
+
+def _build_activity_time_series(
+    time_s: list[Any],
+    dist_m: list[Any],
+    altitude: list[Any] | None,
+    hr: list[Any] | None,
+    cadence: list[Any] | None,
+    latlng: list[Any] | None,
+    moving: list[bool],
+    max_points: int = 2500,
+) -> dict[str, Any]:
+    """Activity profile sampled on the real time axis (not the distance grid).
+
+    The distance grid cannot represent a stationary period (it spans ~0 distance), so pauses
+    are invisible there. Here time always advances: during a stop the distance and elevation
+    are held constant and cadence/pace are zeroed, so the elevation profile is flat and cadence
+    drops to 0 across the pause. Output is downsampled but always keeps stop boundaries.
+    """
+    n = len(time_s)
+    has_alt = bool(altitude) and len(altitude) == n
+    has_hr = bool(hr) and len(hr) == n
+    has_cad = bool(cadence) and len(cadence) == n
+    has_ll = bool(latlng) and len(latlng) == n
+
+    ele_smooth = _rolling_mean([float(a) for a in altitude], SMOOTHING_WINDOW_POINTS) if has_alt else None
+    t0 = float(time_s[0])
+
+    def _ll(i: int) -> tuple[float | None, float | None]:
+        if has_ll and isinstance(latlng[i], (list, tuple)) and len(latlng[i]) == 2:
+            return round(float(latlng[i][0]), 6), round(float(latlng[i][1]), 6)
+        return None, None
+
+    def _hr(i: int) -> float | None:
+        return float(hr[i]) if has_hr and hr[i] is not None else None
+
+    # One row per real activity sample. Distance/elevation/position are held at their pre-stop
+    # value while stopped so the elevation profile is flat; cadence/pace are 0. The only synthetic
+    # row is one inserted at the instant each stop *begins* (same timestamp as the last moving
+    # sample) so the drop to 0 is a clean vertical step aligned with the plateau, instead of a
+    # diagonal ramp across the (possibly long) gap. HR is kept real throughout (shows recovery).
+    rows: list[dict[str, Any]] = []
+    held_d = float(dist_m[0])
+    held_e = ele_smooth[0] if ele_smooth else None
+    held_la, held_lo = _ll(0)
+    for i in range(n):
+        stopped = i > 0 and not moving[i]
+        if stopped and moving[i - 1]:
+            rows.append({"t": float(time_s[i - 1]) - t0, "dkm": held_d / 1000.0, "ele": held_e,
+                         "cad": 0.0, "hr": _hr(i - 1), "pace": None, "moving": False,
+                         "lat": held_la, "lng": held_lo, "synth": True})
+        if not stopped:
+            held_d = float(dist_m[i])
+            if ele_smooth:
+                held_e = ele_smooth[i]
+            held_la, held_lo = _ll(i)
+        if stopped or i == 0:
+            pace = None
+        else:
+            dt = float(time_s[i]) - float(time_s[i - 1])
+            dd = float(dist_m[i]) - float(dist_m[i - 1])
+            pace = (dt / 60.0) / (dd / 1000.0) if dd > 0 and dt > 0 else None
+        rows.append({"t": float(time_s[i]) - t0, "dkm": held_d / 1000.0, "ele": held_e,
+                     "cad": 0.0 if stopped else (float(cadence[i]) if has_cad and cadence[i] is not None else None),
+                     "hr": _hr(i), "pace": pace, "moving": not stopped,
+                     "lat": held_la, "lng": held_lo, "synth": False})
+
+    m = len(rows)
+    pace_sm = _smooth_optional([r["pace"] for r in rows], SMOOTHING_WINDOW_POINTS)
+
+    # slope from held distance + smoothed elevation (distance is flat during stops -> slope 0)
+    slope: list[float | None] = [None] * m
+    if ele_smooth:
+        for i in range(m):
+            lo = max(0, i - 1)
+            hi = min(m - 1, i + 1)
+            dd = (rows[hi]["dkm"] - rows[lo]["dkm"]) * 1000.0
+            if dd <= 0:
+                slope[i] = 0.0
+            else:
+                s = (float(rows[hi]["ele"]) - float(rows[lo]["ele"])) / dd * 100.0
+                slope[i] = round(max(-SLOPE_CLAMP_PCT, min(SLOPE_CLAMP_PCT, s)), 1)
+
+    # downsample but always keep endpoints, stop boundaries and the synthetic step points
+    keep = set(range(0, m, max(1, m // max_points)))
+    keep.add(0)
+    keep.add(m - 1)
+    for i in range(1, m):
+        if rows[i]["synth"] or rows[i]["moving"] != rows[i - 1]["moving"]:
+            keep.add(i)
+            keep.add(i - 1)
+    idx = sorted(keep)
+
+    def col(key: str) -> list[Any]:
+        return [rows[i][key] for i in idx]
+
+    return {
+        "n": len(idx),
+        "t_s": [round(rows[i]["t"]) for i in idx],
+        "dist_km": [round(rows[i]["dkm"], 3) for i in idx],
+        "ele_m": [round(rows[i]["ele"], 1) for i in idx] if ele_smooth else None,
+        "slope_pct": [slope[i] for i in idx] if ele_smooth else None,
+        "pace_min_per_km": [round(pace_sm[i], 2) if pace_sm[i] is not None else None for i in idx],
+        "hr_bpm": [round(rows[i]["hr"]) if rows[i]["hr"] is not None else None for i in idx],
+        "cadence_spm": [round(rows[i]["cad"]) if rows[i]["cad"] is not None else None for i in idx],
+        "lat": col("lat"),
+        "lng": col("lng"),
+    }
+
+
 def extract_waypoints(xml_text: str) -> list[dict[str, Any]]:
     """Return waypoints (<wpt>) from a GPX file as a list of dicts with lat/lng/name/desc."""
     try:
@@ -348,53 +497,45 @@ def compare_route_with_activity(track: dict[str, Any], streams: dict[str, Any]) 
 
     latlng = _stream_data("latlng")
     hr = _stream_data("heartrate")
-    moving = _stream_data("moving")
-    velocity = _stream_data("velocity_smooth")
     cadence = _stream_data("cadence")
+    altitude = _stream_data("altitude")
 
-    # Stop detection priority: cadence > velocity_smooth > Strava moving boolean.
-    # Cadence is non-directional (shuffling at an aid station = 0 spm regardless of GPS drift).
-    # Threshold of 20 spm sits well below slow hiking (~70 spm) and catches pacing/shuffling.
-    # None cadence values (device gap) are treated as moving to avoid false stops.
-    # Runs shorter than MIN_STOP_DURATION_S are ignored (corners / GPS jitter).
-    STOP_CADENCE_SPM = 20
-    STOP_SPEED_MS = 0.5
-    MIN_STOP_DURATION_S = 5
-    has_cadence = bool(cadence) and len(cadence) == len(time_s)
-    has_velocity = bool(velocity) and len(velocity) == len(time_s)
-    has_moving_data = has_cadence or has_velocity or (bool(moving) and len(moving) == len(time_s))
+    # Stop detection by interval speed (distance gained / time elapsed). Cadence/velocity fail on
+    # auto-pause devices that drop samples while stationary (the gap's endpoints still read as
+    # running), whereas a pause is unmistakable as a low-speed interval. See _detect_moving.
+    STOP_SPEED_MS = 0.4
+    # Single threshold for what counts as a stop: anything shorter is merged back into moving and
+    # is neither counted in the km-split stopped time nor drawn on the map/profile. Tune this knob.
+    MIN_STOP_DURATION_S = 15
+    has_moving_data = True
+    filtered_moving = _detect_moving(time_s, dist_m, STOP_SPEED_MS, MIN_STOP_DURATION_S)
+    cum_moving_s: list[float] | None = [0.0]
+    for i in range(1, len(time_s)):
+        dt = float(time_s[i]) - float(time_s[i - 1])
+        cum_moving_s.append(cum_moving_s[-1] + (dt if filtered_moving[i] and dt > 0 else 0.0))
 
-    cum_moving_s: list[float] | None = None
-    if has_moving_data:
-        if has_cadence:
-            raw_moving: list[bool] = [
-                c is None or float(c) >= STOP_CADENCE_SPM for c in cadence
-            ]
-        elif has_velocity:
-            raw_moving = [float(v) >= STOP_SPEED_MS for v in velocity]
+    # Real stop segments, from the same moving flags that drive the time-series plateaus, so the
+    # chart's stop bands line up exactly with where cadence drops to 0 (anchored by real elapsed
+    # time and distance, not km-split cumulative time which lands on the km boundary instead).
+    _t0 = float(time_s[0])
+    stops: list[dict[str, Any]] = []
+    si = 1
+    while si < len(filtered_moving):
+        if not filtered_moving[si]:
+            sj = si
+            while sj < len(filtered_moving) and not filtered_moving[sj]:
+                sj += 1
+            t_start = float(time_s[si - 1]) - _t0
+            t_end = float(time_s[sj - 1]) - _t0
+            stops.append({
+                "t_start_s": round(t_start),
+                "t_end_s": round(t_end),
+                "duration_s": round(t_end - t_start),
+                "dist_km": round(float(dist_m[si - 1]) / 1000.0, 3),
+            })
+            si = sj
         else:
-            raw_moving = [bool(v) for v in moving]  # type: ignore[assignment]
-
-        filtered_moving = list(raw_moving)
-        i = 0
-        while i < len(filtered_moving):
-            if not filtered_moving[i]:
-                j = i + 1
-                while j < len(filtered_moving) and not filtered_moving[j]:
-                    j += 1
-                stop_end = j - 1
-                stop_dur = float(time_s[stop_end]) - float(time_s[i]) if stop_end < len(time_s) else 0.0
-                if stop_dur < MIN_STOP_DURATION_S:
-                    for k in range(i, j):
-                        filtered_moving[k] = True
-                i = j
-            else:
-                i += 1
-
-        cum_moving_s = [0.0]
-        for i in range(1, len(time_s)):
-            dt = float(time_s[i]) - float(time_s[i - 1])
-            cum_moving_s.append(cum_moving_s[-1] + (dt if filtered_moving[i] and dt > 0 else 0.0))
+            si += 1
 
     route_dist_km = track["dist_km"]
     n = len(route_dist_km)
@@ -463,15 +604,10 @@ def compare_route_with_activity(track: dict[str, Any], streams: dict[str, Any]) 
             smoothed.append(round(sum(window) / len(window), 3) if window else None)
         seg_pace = smoothed
 
-    # smooth cadence the same way
-    seg_cadence: list[float | None] = grid_cadence
-    if any(v is not None for v in grid_cadence):
-        half = SMOOTHING_WINDOW_POINTS // 2
-        smoothed_cad: list[float | None] = []
-        for i in range(n):
-            window = [v for v in grid_cadence[max(0, i - half):min(n, i + half + 1)] if v is not None]
-            smoothed_cad.append(round(sum(window) / len(window), 1) if window else None)
-        seg_cadence = smoothed_cad
+    # No smoothing for cadence: the 1 Hz stream resampled onto the 20 m grid is already smooth
+    # enough, and distance-based smoothing bleeds stop cadence (0 spm) into adjacent moving
+    # segments, producing impossible values like 86 spm at aid stations.
+    seg_cadence: list[float | None] = [round(v, 1) if v is not None else None for v in grid_cadence]
 
     # per-km splits (elapsed time, stopped time shown separately)
     # prefer raw elevation for gain/loss (smoothed version undercounts repeated short climbs)
@@ -557,6 +693,16 @@ def compare_route_with_activity(track: dict[str, Any], streams: dict[str, Any]) 
     total_elapsed_s = round(float(time_s[-1]) - float(time_s[0]))
     total_moving_s = round(cum_moving_s[-1]) if cum_moving_s is not None else total_elapsed_s
 
+    # Elapsed time at each route grid point, for a time-based x-axis on the frontend.
+    # During pauses, adjacent grid points have nearly identical elevation but a large time gap,
+    # so the elevation profile naturally appears flat during stops.
+    t0 = float(time_s[0])
+    grid_elapsed_s = [round(float(t) - t0) if t is not None else None for t in grid_time]
+
+    time_series = _build_activity_time_series(
+        time_s, dist_m, altitude, hr, cadence, latlng, filtered_moving
+    )
+
     return {
         "route_distance_km": round(route_total_km, 2),
         "activity_distance_km": round(activity_total_km, 2),
@@ -572,6 +718,9 @@ def compare_route_with_activity(track: dict[str, Any], streams: dict[str, Any]) 
         "km_splits": splits,
         "bracket_stats": bracket_stats,
         "actual_latlng": actual_latlng,
+        "grid_elapsed_s": grid_elapsed_s,
+        "time_series": time_series,
+        "stops": stops,
     }
 
 

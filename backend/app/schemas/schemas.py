@@ -304,6 +304,9 @@ class RouteComparisonResponse(BaseModel):
     km_splits: List[dict[str, Any]] = Field(default_factory=list)
     bracket_stats: List[dict[str, Any]] = Field(default_factory=list)
     actual_latlng: List[List[float]] = Field(default_factory=list)
+    grid_elapsed_s: List[Optional[int]] = Field(default_factory=list)
+    time_series: Optional[dict[str, Any]] = None
+    stops: List[dict[str, Any]] = Field(default_factory=list)
 
 
 class RouteDetailResponse(RouteSummaryResponse):
