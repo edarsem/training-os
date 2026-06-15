@@ -213,18 +213,24 @@ def _build_activity_time_series(
     m = len(rows)
     pace_sm = _smooth_optional([r["pace"] for r in rows], SMOOTHING_WINDOW_POINTS)
 
-    # slope from held distance + smoothed elevation (distance is flat during stops -> slope 0)
+    # Slope over a ~±20 m distance baseline (not ±1 sample), then smoothed, so the gradient colour
+    # matches the planned route's. Per-sample central differences over the dense, variably-spaced
+    # activity stream are ~3x noisier and make the gradient flicker between near-black extremes.
+    # (Distance is held flat during stops, so the baseline naturally reads slope ~0 there.)
+    SLOPE_BASELINE_M = 20.0
     slope: list[float | None] = [None] * m
     if ele_smooth:
+        dk = [r["dkm"] for r in rows]
         for i in range(m):
-            lo = max(0, i - 1)
-            hi = min(m - 1, i + 1)
-            dd = (rows[hi]["dkm"] - rows[lo]["dkm"]) * 1000.0
-            if dd <= 0:
-                slope[i] = 0.0
-            else:
-                s = (float(rows[hi]["ele"]) - float(rows[lo]["ele"])) / dd * 100.0
-                slope[i] = round(max(-SLOPE_CLAMP_PCT, min(SLOPE_CLAMP_PCT, s)), 1)
+            lo, hi = i, i
+            while lo > 0 and (dk[i] - dk[lo]) * 1000.0 < SLOPE_BASELINE_M:
+                lo -= 1
+            while hi < m - 1 and (dk[hi] - dk[i]) * 1000.0 < SLOPE_BASELINE_M:
+                hi += 1
+            dd = (dk[hi] - dk[lo]) * 1000.0
+            s = (float(rows[hi]["ele"]) - float(rows[lo]["ele"])) / dd * 100.0 if dd > 0 else 0.0
+            slope[i] = max(-SLOPE_CLAMP_PCT, min(SLOPE_CLAMP_PCT, s))
+        slope = [round(s, 1) if s is not None else None for s in _smooth_optional(slope, SMOOTHING_WINDOW_POINTS)]
 
     # downsample but always keep endpoints, stop boundaries and the synthetic step points
     keep = set(range(0, m, max(1, m // max_points)))

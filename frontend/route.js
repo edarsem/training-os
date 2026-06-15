@@ -119,6 +119,21 @@ function nearestProfileIndex(lat, lng) {
     return best;
 }
 
+function plannedDistanceForLatLng(lat, lng) {
+    // Nearest distance on the route's (planned) track to a geographic point. Markers are stored
+    // against this track, so a point pinned on the activity profile must be converted back here.
+    if (!currentTrack) return 0;
+    let best = 0;
+    let bestDist = Infinity;
+    for (let i = 0; i < currentTrack.n; i++) {
+        const dLat = currentTrack.lat[i] - lat;
+        const dLng = (currentTrack.lng[i] - lng) * Math.cos(lat * Math.PI / 180);
+        const d = dLat * dLat + dLng * dLng;
+        if (d < bestDist) { bestDist = d; best = i; }
+    }
+    return currentTrack.dist_km[best];
+}
+
 function profileIndexForDistance(distKm) {
     if (!activeProfile) return 0;
     const d = Number(distKm);
@@ -571,7 +586,7 @@ document.addEventListener('alpine:init', () => {
                             pointRadius: 0,
                             borderWidth: 3,
                             fill: true,
-                            backgroundColor: 'rgba(148, 163, 184, 0.15)',
+                            backgroundColor: '#ffffff',
                             tension: 0.1,
                             segment: {
                                 borderColor: (ctx) => colorForSlope(activeProfile?.slope?.[ctx.p1DataIndex] ?? 0),
@@ -741,11 +756,11 @@ document.addEventListener('alpine:init', () => {
 
         updateMarkerOverlayDataset() {
             if (!elevationChart || !activeProfile || !activeProfile.ele) return;
-            // Markers are anchored to the planned route's distance. In time mode the x-axis is the
-            // activity, whose distance scale drifts from the plan (different path length), so match
-            // by geography instead of distance number — otherwise a ravito lands ~400 m off.
+            // Markers are anchored to the planned route's distance. When the profile is the activity
+            // (its distance scale drifts from the plan — different path length), match by geography
+            // instead of distance number, otherwise a ravito lands ~400 m off.
             const data = (this.route?.markers || []).map((m) => {
-                const idx = (activeProfile.mode === 'time' && m.lat != null && m.lng != null)
+                const idx = (activeProfile.source === 'activity' && m.lat != null && m.lng != null)
                     ? nearestProfileIndex(Number(m.lat), Number(m.lng))
                     : profileIndexForDistance(Number(m.distance_km));
                 return { x: activeProfile.x[idx], y: activeProfile.ele[idx], marker: m };
@@ -850,12 +865,19 @@ document.addEventListener('alpine:init', () => {
 
         openNoteAtPinned() {
             if (pinnedTrackIdx === null || !activeProfile || !this.route) return;
-            this.openMarkerForm('note', activeProfile.distKm[pinnedTrackIdx]);
+            let distKm = activeProfile.distKm[pinnedTrackIdx];
+            // markers are anchored on the planned track; convert an activity-profile pin by geography
+            if (activeProfile.source === 'activity' && activeProfile.lat[pinnedTrackIdx] != null) {
+                distKm = plannedDistanceForLatLng(activeProfile.lat[pinnedTrackIdx], activeProfile.lng[pinnedTrackIdx]);
+            }
+            this.openMarkerForm('note', distKm);
         },
 
         setDataSource(source) {
             this.dataSource = source;
             this.updateTraceVisibility();
+            // the elevation profile base (activity vs planned) follows the primary trace
+            if (elevationChart) this.setXAxisMode(this.xAxisMode);
         },
 
         renderKmMarkers() {
@@ -1068,17 +1090,23 @@ document.addEventListener('alpine:init', () => {
 
         rebuildActiveProfile() {
             const ts = this.comparison?.time_series;
-            if (this.xAxisMode === 'time' && ts && ts.n) {
+            // Use the activity series whenever Strava is the primary trace (or in time mode, which
+            // is inherently activity). Then everything — elevation, distance, position, overlays,
+            // stop bands — lives on the activity's own scale, so there's no planned-vs-activity
+            // offset and a pinned point's map location / profile altitude / distance all agree.
+            const useActivity = ts && ts.n && (this.xAxisMode === 'time' || this.dataSource === 'strava');
+            if (useActivity) {
+                const timeX = this.xAxisMode === 'time';
                 activeProfile = {
-                    mode: 'time', n: ts.n,
-                    x: ts.t_s, ele: ts.ele_m, slope: ts.slope_pct,
+                    mode: this.xAxisMode, source: 'activity', n: ts.n,
+                    x: timeX ? ts.t_s : ts.dist_km, ele: ts.ele_m, slope: ts.slope_pct,
                     lat: ts.lat, lng: ts.lng, distKm: ts.dist_km, timeS: ts.t_s,
                     pace: ts.pace_min_per_km, hr: ts.hr_bpm, cad: ts.cadence_spm,
                 };
             } else {
                 const t = currentTrack;
                 activeProfile = {
-                    mode: 'distance', n: t.n,
+                    mode: 'distance', source: 'planned', n: t.n,
                     x: t.dist_km, ele: t.ele_m, slope: t.slope_pct,
                     lat: t.lat, lng: t.lng, distKm: t.dist_km, timeS: cumulativeTimeS,
                     pace: this.comparison?.pace_min_per_km, hr: this.comparison?.hr_bpm, cad: this.comparison?.cadence_spm,
