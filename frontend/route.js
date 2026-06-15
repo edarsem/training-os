@@ -585,8 +585,7 @@ document.addEventListener('alpine:init', () => {
                             data: xyData(activeProfile.ele),
                             pointRadius: 0,
                             borderWidth: 3,
-                            fill: true,
-                            backgroundColor: '#ffffff',
+                            fill: false,
                             tension: 0.1,
                             segment: {
                                 borderColor: (ctx) => colorForSlope(activeProfile?.slope?.[ctx.p1DataIndex] ?? 0),
