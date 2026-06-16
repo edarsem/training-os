@@ -120,6 +120,9 @@ class RouteMarker(Base):
     lat = Column(Float, nullable=True)
     lng = Column(Float, nullable=True)
     elevation_m = Column(Float, nullable=True)
+    # True when the marker's location is farther than MARKER_OUT_OF_TRACK_THRESHOLD_M from the
+    # primary trace (e.g. a GPX note whose spot the linked Strava activity never passed near).
+    out_of_track = Column(Boolean, nullable=False, default=False)
     label = Column(String, nullable=True)
     note = Column(Text, nullable=True)
 

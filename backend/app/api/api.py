@@ -17,10 +17,13 @@ from app.core.training_load_defaults import (
 )
 from app.core.gpx import (
     GPXProcessingError,
+    MARKER_OUT_OF_TRACK_THRESHOLD_M,
     compare_route_with_activity,
     compute_slope_histogram,
     interpolate_point_at_distance,
+    nearest_distance_and_gap,
     nearest_distance_km,
+    primary_trace,
     process_gpx,
     process_streams,
 )
@@ -613,6 +616,12 @@ def get_route(route_id: int, db: Session = Depends(get_db)):
     route = crud.get_route(db, route_id)
     if not route:
         raise HTTPException(status_code=404, detail="Route not found")
+    # Lazily migrate markers created before the route was linked: snap them onto the now-primary
+    # Strava trace (idempotent — only writes the first time). Keeps old GPX-anchored notes aligned.
+    session = crud.get_session_by_id(db, route.session_id) if route.session_id else None
+    track, _metrics, strava_primary = primary_trace(route, session)
+    if strava_primary:
+        _reanchor_markers_to_track(db, route.id, track, ref_total_km=route.distance_km)
     return _route_detail_response(route, crud.list_route_markers(db, route_id))
 
 
@@ -846,6 +855,10 @@ def match_route_session(route_id: int, payload: schemas.RouteMatchRequest, db: S
     db.refresh(route)
     db.refresh(session)
 
+    # The activity is now the primary trace: re-anchor existing GPX markers onto it (snapping
+    # within the threshold, flagging the rest off-route) so every marker shares one trace.
+    _reanchor_markers_to_track(db, route.id, _route_primary_track(db, route), ref_total_km=route.distance_km)
+
     return _build_comparison_response(route, session)
 
 
@@ -871,27 +884,103 @@ def unlink_route_session(route_id: int, db: Session = Depends(get_db)):
         raise HTTPException(status_code=404, detail="Route not found")
     route.session_id = None
     db.commit()
+    db.refresh(route)
+    # The GPX is the primary trace again: re-anchor markers back onto it.
+    if route.gpx_xml:
+        _reanchor_markers_to_track(db, route.id, json.loads(route.track_json), ref_total_km=route.distance_km)
     return {"ok": True}
+
+
+def _route_primary_track(db: Session, route: models.Route) -> dict:
+    """The track every marker on this route is anchored to (the linked activity when present)."""
+    session = crud.get_session_by_id(db, route.session_id) if route.session_id else None
+    track, _metrics, _strava = primary_trace(route, session)
+    return track
+
+
+def _anchor_on_track(
+    track: dict,
+    *,
+    distance_km: float | None = None,
+    lat: float | None = None,
+    lng: float | None = None,
+    hint_frac: float | None = None,
+) -> dict:
+    """Resolve a marker's anchor on the primary trace.
+
+    With lat/lng (a pinned point), the marker snaps to the nearest trace point — unless that
+    point is farther than the out-of-track threshold, in which case the marker keeps its own
+    location and is flagged ``out_of_track`` (distance_km stays a best-effort nearest value).
+    ``hint_frac`` disambiguates loops (see nearest_distance_and_gap). Without lat/lng, the given
+    distance_km is interpolated along the trace.
+    """
+    if lat is not None and lng is not None:
+        d_km, gap_m = nearest_distance_and_gap(track, lat, lng, hint_frac=hint_frac)
+        if gap_m > MARKER_OUT_OF_TRACK_THRESHOLD_M:
+            return {"distance_km": d_km, "lat": lat, "lng": lng, "elevation_m": None, "out_of_track": True}
+        point = interpolate_point_at_distance(track, d_km)
+        return {**point, "out_of_track": False}
+    point = interpolate_point_at_distance(track, distance_km or 0.0)
+    return {**point, "out_of_track": False}
+
+
+def _reanchor_markers_to_track(db: Session, route_id: int, track: dict, ref_total_km: float | None = None) -> bool:
+    """Re-snap every marker onto the given track by geography (used when the primary trace
+    changes, e.g. a GPX route is linked to / unlinked from a Strava activity). Idempotent:
+    only writes (and returns True) when at least one marker actually moved.
+
+    ``ref_total_km`` (the GPX total) turns each marker's current distance into a fractional
+    position hint, so start/finish markers on a loop stay on their own end of the trace.
+    """
+    changed = False
+    for m in crud.list_route_markers(db, route_id):
+        if m.lat is None or m.lng is None:
+            continue
+        hint = None
+        if ref_total_km and ref_total_km > 0:
+            hint = max(0.0, min(1.0, float(m.distance_km) / ref_total_km))
+        anchored = _anchor_on_track(track, lat=m.lat, lng=m.lng, hint_frac=hint)
+        new_lat = m.lat if anchored["out_of_track"] else anchored["lat"]
+        new_lng = m.lng if anchored["out_of_track"] else anchored["lng"]
+        new_ele = m.elevation_m if anchored["out_of_track"] else anchored["elevation_m"]
+        if (
+            round(float(m.distance_km), 3) != round(float(anchored["distance_km"]), 3)
+            or bool(m.out_of_track) != anchored["out_of_track"]
+            or m.lat != new_lat
+            or m.lng != new_lng
+        ):
+            m.distance_km = anchored["distance_km"]
+            m.out_of_track = anchored["out_of_track"]
+            m.lat = new_lat
+            m.lng = new_lng
+            m.elevation_m = new_ele
+            changed = True
+    if changed:
+        db.commit()
+    return changed
 
 
 @router.post("/routes/{route_id}/markers", response_model=schemas.RouteMarkerResponse)
 def create_route_marker(route_id: int, payload: schemas.RouteMarkerCreate, db: Session = Depends(get_db)):
-    """Add a ravito or note marker anchored at distance_km; position is interpolated from the track."""
+    """Add a ravito or note marker anchored on the route's primary trace (the linked activity
+    when present). A pinned point sends lat/lng and snaps geographically; otherwise distance_km
+    is interpolated along the trace."""
     route = crud.get_route(db, route_id)
     if not route:
         raise HTTPException(status_code=404, detail="Route not found")
 
-    track = json.loads(route.track_json)
-    point = interpolate_point_at_distance(track, payload.distance_km)
+    track = _route_primary_track(db, route)
+    anchored = _anchor_on_track(track, distance_km=payload.distance_km, lat=payload.lat, lng=payload.lng)
 
     return crud.create_route_marker(
         db,
         route_id=route_id,
         kind=payload.kind,
-        distance_km=point["distance_km"],
-        lat=point["lat"],
-        lng=point["lng"],
-        elevation_m=point["elevation_m"],
+        distance_km=anchored["distance_km"],
+        lat=anchored["lat"],
+        lng=anchored["lng"],
+        elevation_m=anchored["elevation_m"],
+        out_of_track=anchored["out_of_track"],
         label=payload.label,
         note=payload.note,
     )
@@ -899,7 +988,7 @@ def create_route_marker(route_id: int, payload: schemas.RouteMarkerCreate, db: S
 
 @router.put("/routes/{route_id}/markers/{marker_id}", response_model=schemas.RouteMarkerResponse)
 def update_route_marker(route_id: int, marker_id: int, payload: schemas.RouteMarkerUpdate, db: Session = Depends(get_db)):
-    """Update a marker; re-interpolates lat/lng/elevation when distance_km changes."""
+    """Update a marker; re-anchors on the primary trace when distance_km or lat/lng changes."""
     route = crud.get_route(db, route_id)
     if not route:
         raise HTTPException(status_code=404, detail="Route not found")
@@ -908,14 +997,21 @@ def update_route_marker(route_id: int, marker_id: int, payload: schemas.RouteMar
         raise HTTPException(status_code=404, detail="Marker not found")
 
     data = payload.model_dump(exclude_unset=True)
-    if "distance_km" in data and data["distance_km"] is not None:
-        track = json.loads(route.track_json)
-        point = interpolate_point_at_distance(track, data["distance_km"])
-        marker.distance_km = point["distance_km"]
-        marker.lat = point["lat"]
-        marker.lng = point["lng"]
-        marker.elevation_m = point["elevation_m"]
-        data.pop("distance_km")
+    new_lat = data.pop("lat", None)
+    new_lng = data.pop("lng", None)
+    new_distance = data.pop("distance_km", None)
+    if new_lat is not None and new_lng is not None:
+        anchored = _anchor_on_track(_route_primary_track(db, route), lat=new_lat, lng=new_lng)
+    elif new_distance is not None:
+        anchored = _anchor_on_track(_route_primary_track(db, route), distance_km=new_distance)
+    else:
+        anchored = None
+    if anchored is not None:
+        marker.distance_km = anchored["distance_km"]
+        marker.lat = anchored["lat"]
+        marker.lng = anchored["lng"]
+        marker.elevation_m = anchored["elevation_m"]
+        marker.out_of_track = anchored["out_of_track"]
     for key, value in data.items():
         setattr(marker, key, value)
     db.commit()

@@ -79,6 +79,11 @@ def run_sqlite_schema_updates() -> None:
         if "zone_0_seconds" not in session_zone_columns:
             conn.execute(text("ALTER TABLE session_hr_zone_time ADD COLUMN zone_0_seconds INTEGER NOT NULL DEFAULT 0"))
 
+        marker_rows = conn.execute(text("PRAGMA table_info(route_markers)")).fetchall()
+        marker_columns = {str(row[1]) for row in marker_rows}
+        if marker_rows and "out_of_track" not in marker_columns:
+            conn.execute(text("ALTER TABLE route_markers ADD COLUMN out_of_track BOOLEAN NOT NULL DEFAULT 0"))
+
         conn.execute(
             text(
                 """

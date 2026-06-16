@@ -304,6 +304,7 @@ def create_route_marker(
     elevation_m: Optional[float],
     label: Optional[str],
     note: Optional[str],
+    out_of_track: bool = False,
 ) -> models.RouteMarker:
     marker = models.RouteMarker(
         route_id=route_id,
@@ -312,6 +313,7 @@ def create_route_marker(
         lat=lat,
         lng=lng,
         elevation_m=elevation_m,
+        out_of_track=out_of_track,
         label=label,
         note=note,
     )

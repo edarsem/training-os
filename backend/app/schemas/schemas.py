@@ -226,6 +226,10 @@ class TrainingLoadRecomputeResponse(BaseModel):
 class RouteMarkerCreate(BaseModel):
     kind: Literal["ravito", "note"]
     distance_km: float = Field(..., ge=0)
+    # Optional geographic anchor: when set, the marker snaps to the nearest point on the primary
+    # trace (and distance_km is derived from it), which keeps a pinned point exactly where it sits.
+    lat: Optional[float] = None
+    lng: Optional[float] = None
     label: Optional[str] = None
     note: Optional[str] = None
 
@@ -233,6 +237,8 @@ class RouteMarkerCreate(BaseModel):
 class RouteMarkerUpdate(BaseModel):
     kind: Optional[Literal["ravito", "note"]] = None
     distance_km: Optional[float] = Field(None, ge=0)
+    lat: Optional[float] = None
+    lng: Optional[float] = None
     label: Optional[str] = None
     note: Optional[str] = None
 
@@ -245,6 +251,7 @@ class RouteMarkerResponse(BaseModel):
     lat: Optional[float] = None
     lng: Optional[float] = None
     elevation_m: Optional[float] = None
+    out_of_track: bool = False
     label: Optional[str] = None
     note: Optional[str] = None
     created_at: Optional[datetime] = None

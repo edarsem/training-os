@@ -340,6 +340,7 @@
                                         <div>
                                             <span class="font-semibold" x-text="`km ${Number(m.distance_km).toFixed(1)}`"></span>
                                             <span x-show="m.elevation_m !== null" class="text-gray-500" x-text="m.elevation_m !== null ? ` · ${Math.round(m.elevation_m)} m` : ''"></span>
+                                            <span x-show="m.out_of_track" class="text-amber-600 text-xs font-medium" title="This spot is off the primary trace">⚠︎ off-route</span>
                                             <span x-show="m.label" class="font-medium" x-text="m.label ? ' — ' + m.label : ''"></span>
                                         </div>
                                         <div x-show="m.note" class="text-gray-600 whitespace-pre-wrap" x-text="m.note"></div>
@@ -431,7 +432,7 @@
                     </div>
                     <div>
                         <label class="block text-sm font-medium text-gray-700">Distance (km)</label>
-                        <input type="number" step="any" min="0" x-model="markerForm.distance_km" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm border p-2 sm:text-sm" required>
+                        <input type="number" step="any" min="0" x-model="markerForm.distance_km" @input="onMarkerDistanceInput()" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm border p-2 sm:text-sm" required>
                     </div>
                     <div>
                         <label class="block text-sm font-medium text-gray-700">Label</label>

@@ -122,21 +122,6 @@ function nearestProfileIndex(lat, lng) {
     return best;
 }
 
-function plannedDistanceForLatLng(lat, lng) {
-    // Nearest distance on the route's (planned) track to a geographic point. Markers are stored
-    // against this track, so a point pinned on the activity profile must be converted back here.
-    if (!currentTrack) return 0;
-    let best = 0;
-    let bestDist = Infinity;
-    for (let i = 0; i < currentTrack.n; i++) {
-        const dLat = currentTrack.lat[i] - lat;
-        const dLng = (currentTrack.lng[i] - lng) * Math.cos(lat * Math.PI / 180);
-        const d = dLat * dLat + dLng * dLng;
-        if (d < bestDist) { bestDist = d; best = i; }
-    }
-    return currentTrack.dist_km[best];
-}
-
 function profileIndexForDistance(distKm) {
     if (!activeProfile) return 0;
     const d = Number(distKm);
@@ -758,11 +743,11 @@ document.addEventListener('alpine:init', () => {
 
         updateMarkerOverlayDataset() {
             if (!elevationChart || !activeProfile || !activeProfile.ele) return;
-            // Markers are anchored to the planned route's distance. When the profile is the activity
-            // (its distance scale drifts from the plan — different path length), match by geography
-            // instead of distance number, otherwise a ravito lands ~400 m off.
+            // Markers carry a lat/lng on the primary trace, so place them by geography on whichever
+            // profile is shown (activity or planned overlay) — matching by distance number would
+            // drift when the two traces differ in length. Fall back to distance only if no lat/lng.
             const data = (this.route?.markers || []).map((m) => {
-                const idx = (activeProfile.source === 'activity' && m.lat != null && m.lng != null)
+                const idx = (m.lat != null && m.lng != null)
                     ? nearestProfileIndex(Number(m.lat), Number(m.lng))
                     : profileIndexForDistance(Number(m.distance_km));
                 return { x: activeProfile.x[idx], y: activeProfile.ele[idx], marker: m };
@@ -871,12 +856,18 @@ document.addEventListener('alpine:init', () => {
 
         openNoteAtPinned() {
             if (pinnedTrackIdx === null || !activeProfile || !this.route) return;
-            let distKm = activeProfile.distKm[pinnedTrackIdx];
-            // markers are anchored on the planned track; convert an activity-profile pin by geography
-            if (activeProfile.source === 'activity' && activeProfile.lat[pinnedTrackIdx] != null) {
-                distKm = plannedDistanceForLatLng(activeProfile.lat[pinnedTrackIdx], activeProfile.lng[pinnedTrackIdx]);
+            const distKm = activeProfile.distKm[pinnedTrackIdx];
+            // When the active profile IS the primary trace (activity, or the GPX of an unlinked
+            // route), the pinned distance is exact — send it directly so a note placed at "km 10"
+            // is stored at km 10. Only pinning on the planned overlay (GPX view of a linked route)
+            // needs geographic snapping onto the primary trace.
+            if (activeProfile.source === 'activity' || !this.comparison) {
+                this.openMarkerForm('note', distKm);
+            } else {
+                const lat = activeProfile.lat?.[pinnedTrackIdx];
+                const lng = activeProfile.lng?.[pinnedTrackIdx];
+                this.openMarkerForm('note', distKm, lat, lng);
             }
-            this.openMarkerForm('note', distKm);
         },
 
         setDataSource(source) {
@@ -931,11 +922,13 @@ document.addEventListener('alpine:init', () => {
             }
         },
 
-        openMarkerForm(kind, distanceKm) {
+        openMarkerForm(kind, distanceKm, lat = null, lng = null) {
             this.markerForm = {
                 id: null,
                 kind,
                 distance_km: Number(Number(distanceKm).toFixed(2)),
+                lat: lat ?? null,
+                lng: lng ?? null,
                 label: '',
                 note: '',
             };
@@ -947,10 +940,18 @@ document.addEventListener('alpine:init', () => {
                 id: m.id,
                 kind: m.kind,
                 distance_km: Number(m.distance_km),
+                lat: null,
+                lng: null,
                 label: m.label || '',
                 note: m.note || '',
             };
             this.isMarkerModalOpen = true;
+        },
+
+        // Editing the distance by hand drops any pinned lat/lng so the typed distance wins.
+        onMarkerDistanceInput() {
+            this.markerForm.lat = null;
+            this.markerForm.lng = null;
         },
 
         async saveMarker() {
@@ -961,6 +962,11 @@ document.addEventListener('alpine:init', () => {
                 label: (this.markerForm.label || '').trim() || null,
                 note: (this.markerForm.note || '').trim() || null,
             };
+            // A pinned point carries lat/lng: anchor geographically on the primary trace.
+            if (this.markerForm.lat != null && this.markerForm.lng != null) {
+                payload.lat = Number(this.markerForm.lat);
+                payload.lng = Number(this.markerForm.lng);
+            }
             const isEdit = !!this.markerForm.id;
             const url = isEdit
                 ? `${API_BASE}/routes/${this.route.id}/markers/${this.markerForm.id}`

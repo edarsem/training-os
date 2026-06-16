@@ -1288,19 +1288,22 @@ def get_route_details_tool(db: DBSession, *, route_id: int) -> dict[str, Any]:
         build_route_text_summary,
         compare_route_with_activity,
         compute_slope_histogram,
+        primary_trace,
     )
 
     route = crud.get_route(db, route_id)
     if not route:
         return {"error": "route_not_found", "route_id": route_id}
 
-    track = _json.loads(route.track_json)
-    histogram = compute_slope_histogram(track.get("slope_pct"), float(track.get("interval_m", 20.0)))
-    markers = crud.list_route_markers(db, route_id)
-    lines = [build_route_text_summary(route, markers, histogram, track=track)]
-
     # actual performance when the route is linked to an activity with GPS streams
     session = crud.get_session_by_id(db, route.session_id) if route.session_id else None
+
+    # The primary trace (the linked Strava activity, if any) drives the route's distance,
+    # elevation and gradients — so the coach sees the same numbers as the page, not the GPX.
+    track, metrics, _strava_primary = primary_trace(route, session)
+    histogram = compute_slope_histogram(track.get("slope_pct"), float(track.get("interval_m", 20.0)))
+    markers = crud.list_route_markers(db, route_id)
+    lines = [build_route_text_summary(route, markers, histogram, track=track, metrics=metrics)]
     if session and session.gps_stream_json:
         try:
             comparison = compare_route_with_activity(track, _json.loads(session.gps_stream_json))

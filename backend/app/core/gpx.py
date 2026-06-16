@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import math
 from typing import Any
 
@@ -10,6 +11,9 @@ import gpxpy
 GRID_INTERVAL_M = 20.0
 SMOOTHING_WINDOW_POINTS = 9  # centered rolling mean ~180 m
 SLOPE_CLAMP_PCT = 50.0
+# A marker farther than this from the primary trace is "out of track" — its location is kept but
+# it is not snapped onto the trace and its distance_km is only a best-effort nearest value.
+MARKER_OUT_OF_TRACK_THRESHOLD_M = 50.0
 
 def slope_brackets_for(slopes: list[float]) -> list[tuple[float, float, str]]:
     """Gradient brackets in 5% steps (with a flat -2..2 bucket), covering exactly the data range."""
@@ -454,11 +458,65 @@ def compute_slope_histogram(slope_pct: list[float] | None, interval_m: float) ->
 
 def nearest_distance_km(track: dict[str, Any], lat: float, lng: float) -> float:
     """Return the distance_km on the track closest (Haversine) to the given lat/lng."""
+    return nearest_distance_and_gap(track, lat, lng)[0]
+
+
+def nearest_distance_and_gap(
+    track: dict[str, Any],
+    lat: float,
+    lng: float,
+    hint_frac: float | None = None,
+    window_frac: float = 0.25,
+) -> tuple[float, float]:
+    """Return (distance_km on the track closest to lat/lng, gap_m = that closest distance).
+
+    On a loop the start and finish sit at the same spot, so the geographically nearest point is
+    ambiguous. When ``hint_frac`` (the marker's expected fractional position along the trace, 0..1)
+    is given, the search is restricted to points within ``window_frac`` of it, which keeps a start
+    marker on the start and a finish marker on the finish instead of collapsing them.
+    """
     lats = track["lat"]
     lngs = track["lng"]
     dists = track["dist_km"]
-    best_idx = min(range(len(lats)), key=lambda i: _haversine_m(lat, lng, lats[i], lngs[i]))
-    return float(dists[best_idx])
+    n = len(lats)
+    candidates = range(n)
+    if hint_frac is not None and dists and dists[-1] > 0:
+        total = float(dists[-1])
+        lo = (hint_frac - window_frac) * total
+        hi = (hint_frac + window_frac) * total
+        windowed = [i for i in range(n) if lo <= float(dists[i]) <= hi]
+        if windowed:
+            candidates = windowed
+    best_idx = min(candidates, key=lambda i: _haversine_m(lat, lng, lats[i], lngs[i]))
+    gap_m = _haversine_m(lat, lng, lats[best_idx], lngs[best_idx])
+    return float(dists[best_idx]), gap_m
+
+
+def primary_trace(route: Any, session: Any) -> tuple[dict[str, Any], dict[str, Any], bool]:
+    """Resolve a route's canonical/primary trace as ``(track, metrics, strava_is_primary)``.
+
+    When a GPX-born route (``route.gpx_xml`` set) is linked to a session carrying Strava GPS
+    streams, the activity's processed track is the primary trace and every metric (distance,
+    elevation, gradients, marker anchoring) derives from it. Otherwise the route's own
+    ``track_json`` is primary (this covers plain GPX routes and routes born from an activity,
+    whose ``track_json`` already *is* the activity track).
+    """
+    if route.gpx_xml and session is not None and session.gps_stream_json:
+        try:
+            processed = process_streams(json.loads(session.gps_stream_json))
+            return processed["track"], processed, True
+        except GPXProcessingError:
+            pass
+    track = json.loads(route.track_json)
+    metrics = {
+        "distance_km": route.distance_km,
+        "elevation_gain_m": route.elevation_gain_m,
+        "elevation_loss_m": route.elevation_loss_m,
+        "min_elevation_m": route.min_elevation_m,
+        "max_elevation_m": route.max_elevation_m,
+        "has_elevation": bool(route.has_elevation),
+    }
+    return track, metrics, False
 
 
 def interpolate_point_at_distance(track: dict[str, Any], distance_km: float) -> dict[str, Any]:
@@ -812,14 +870,28 @@ def build_route_text_summary(
     markers: list[Any],
     histogram: list[dict[str, Any]],
     track: dict[str, Any] | None = None,
+    metrics: dict[str, Any] | None = None,
 ) -> str:
-    """Compact text block describing a route for the coach LLM. Never includes track arrays."""
+    """Compact text block describing a route for the coach LLM. Never includes track arrays.
+
+    ``metrics`` (distance/elevation) and ``histogram``/``track`` all describe the route's
+    primary trace — the linked Strava activity when there is one, else the GPX. Pass them in
+    so the coach always sees the same numbers shown on the page.
+    """
+    met = metrics or {
+        "distance_km": route.distance_km,
+        "elevation_gain_m": route.elevation_gain_m,
+        "elevation_loss_m": route.elevation_loss_m,
+        "min_elevation_m": route.min_elevation_m,
+        "max_elevation_m": route.max_elevation_m,
+        "has_elevation": bool(route.has_elevation),
+    }
     lines = [f"Route: {route.name} (id {route.id})"]
-    lines.append(f"Distance: {route.distance_km:.1f} km")
-    if route.has_elevation:
+    lines.append(f"Distance: {met['distance_km']:.1f} km")
+    if met["has_elevation"]:
         lines.append(
-            f"Elevation: +{route.elevation_gain_m:.0f} m / -{route.elevation_loss_m:.0f} m "
-            f"(min {route.min_elevation_m:.0f} m, max {route.max_elevation_m:.0f} m)"
+            f"Elevation: +{met['elevation_gain_m']:.0f} m / -{met['elevation_loss_m']:.0f} m "
+            f"(min {met['min_elevation_m']:.0f} m, max {met['max_elevation_m']:.0f} m)"
         )
         nonzero = [b for b in histogram if b["km"] > 0]
         if nonzero:
@@ -833,7 +905,7 @@ def build_route_text_summary(
                 for s in km_splits:
                     lines.append(f"  km {s['km']}: +{s['d_plus_m']}m/-{s['d_minus_m']}m")
     else:
-        lines.append("No elevation data in this route's GPX file.")
+        lines.append("No elevation data for this route.")
 
     if markers:
         lines.append("Markers:")
@@ -841,6 +913,8 @@ def build_route_text_summary(
             label = (m.label or "").strip()
             note = (m.note or "").strip()
             text = f"  km {float(m.distance_km):.1f} [{m.kind}]"
+            if getattr(m, "out_of_track", False):
+                text += " (off-route)"
             if label:
                 text += f" {label}"
             if note:
