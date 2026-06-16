@@ -729,6 +729,11 @@ def compare_route_with_activity(track: dict[str, Any], streams: dict[str, Any]) 
     cadence = _stream_data("cadence")
     altitude = _stream_data("altitude")
 
+    # Strava reports running cadence per-leg (one foot), so it reads ~80-85 instead of true
+    # steps-per-minute. Double it to get spm.
+    if cadence:
+        cadence = [c * 2 if c is not None else None for c in cadence]
+
     # Stop detection by interval speed (distance gained / time elapsed). Cadence/velocity fail on
     # auto-pause devices that drop samples while stationary (the gap's endpoints still read as
     # running), whereas a pause is unmistakable as a low-speed interval. See _detect_moving.
