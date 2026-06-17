@@ -119,21 +119,57 @@ def _smooth_optional(values: list[float | None], window: int) -> list[float | No
     return out
 
 
-def _detect_moving(time_s: list[Any], dist_m: list[Any], stop_speed_ms: float, min_stop_s: float) -> list[bool]:
-    """Per-sample moving flags from interval speed (distance gained / time elapsed).
+def _grade_adjustment_factor(grade: float) -> float:
+    """Flat-equivalent effort multiplier for a running grade (Minetti 2002 metabolic cost).
+
+    grade is the slope as a fraction (0.1 = 10% up, -0.1 = 10% down). The factor is the energy
+    cost at this grade relative to flat, clamped to >= 1.0 so it can only ever *raise* the effort
+    speed — it never makes an interval more likely to read as stopped (gentle downhills cost less
+    than flat, but we don't want to manufacture new false stops there). Internal-only: used solely
+    to make the pause detector robust on steep climbs. ~1.7 at 10%, ~2.5 at 20%, ~3.5 at 30%.
+    """
+    i = grade
+    cost = 155.4 * i**5 - 30.4 * i**4 - 43.3 * i**3 + 46.3 * i**2 + 19.5 * i + 3.6
+    return max(1.0, cost / 3.6)
+
+
+def _detect_moving(
+    time_s: list[Any],
+    dist_m: list[Any],
+    stop_speed_ms: float,
+    min_stop_s: float,
+    altitude: list[Any] | None = None,
+) -> list[bool]:
+    """Per-sample moving flags from grade-adjusted interval effort speed.
 
     moving[i] describes the interval (i-1, i]. This is robust to devices that drop samples
     during auto-pause: a stationary period shows up as a single low-speed interval with a large
     time gap, whereas cadence/velocity at the gap boundaries still read as 'running' (so
     cadence-based detection misses these pauses entirely). Stop runs shorter than min_stop_s
     (GPS jitter, momentary slow-downs) are merged back to moving.
+
+    On steep terrain a genuine power-hike (1-2 km/h) sits below a raw-speed threshold and reads as
+    stopped. To avoid that, the raw interval speed is scaled by a grade-adjustment factor (see
+    _grade_adjustment_factor) before the threshold test, so a slow but real uphill effort still
+    counts as moving. With no altitude the factor is 1.0 and behaviour is identical to raw speed.
     """
     n = len(time_s)
     moving = [True] * n
+    has_alt = bool(altitude) and len(altitude) == n
+    # Smooth elevation first: raw per-sample altitude deltas on the dense stream are too noisy to
+    # derive a usable grade (mirrors the slope smoothing used elsewhere).
+    ele_smooth = _rolling_mean([float(a) for a in altitude], SMOOTHING_WINDOW_POINTS) if has_alt else None
     for i in range(1, n):
         dt = float(time_s[i]) - float(time_s[i - 1])
         dd = float(dist_m[i]) - float(dist_m[i - 1])
-        moving[i] = dt > 0 and (dd / dt) >= stop_speed_ms
+        if dt <= 0 or dd <= 0:
+            moving[i] = False
+            continue
+        factor = 1.0
+        if ele_smooth is not None:
+            grade = (ele_smooth[i] - ele_smooth[i - 1]) / dd
+            factor = _grade_adjustment_factor(grade)
+        moving[i] = (dd / dt) * factor >= stop_speed_ms
     i = 1
     while i < n:
         if not moving[i]:
@@ -742,7 +778,7 @@ def compare_route_with_activity(track: dict[str, Any], streams: dict[str, Any]) 
     # is neither counted in the km-split stopped time nor drawn on the map/profile. Tune this knob.
     MIN_STOP_DURATION_S = 15
     has_moving_data = True
-    filtered_moving = _detect_moving(time_s, dist_m, STOP_SPEED_MS, MIN_STOP_DURATION_S)
+    filtered_moving = _detect_moving(time_s, dist_m, STOP_SPEED_MS, MIN_STOP_DURATION_S, altitude)
     cum_moving_s: list[float] | None = [0.0]
     for i in range(1, len(time_s)):
         dt = float(time_s[i]) - float(time_s[i - 1])
