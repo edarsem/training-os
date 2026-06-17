@@ -308,6 +308,7 @@ document.addEventListener('alpine:init', () => {
         chatInput: '',
         chatError: '',
         isChatLoading: false,
+        coachTextCopied: false,
         markdownConfigured: false,
         chatModelOptions: [
             'mistral-small-latest',
@@ -1316,6 +1317,20 @@ document.addEventListener('alpine:init', () => {
                 this.chatError = e?.message || 'Failed to send message.';
             } finally {
                 this.isChatLoading = false;
+            }
+        },
+
+        async copyCoachText() {
+            if (!this.route) return;
+            try {
+                const res = await fetch(`${API_BASE}/routes/${this.route.id}/coach-text`);
+                const data = await res.json();
+                if (!res.ok) throw new Error(data?.detail || 'Failed to load coach text');
+                await navigator.clipboard.writeText(data?.text || '');
+                this.coachTextCopied = true;
+                setTimeout(() => { this.coachTextCopied = false; }, 1500);
+            } catch (e) {
+                this.chatError = e?.message || 'Failed to copy coach text.';
             }
         },
 

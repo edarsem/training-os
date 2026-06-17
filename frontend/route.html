@@ -362,7 +362,7 @@
                 <!-- Coach chat -->
                 <div class="bg-white p-5 rounded-lg shadow-sm border border-gray-200 mb-6">
                     <div class="flex items-center justify-between mb-3">
-                        <h3 class="text-xl font-semibold">🧠 Coach <span class="text-sm font-normal text-gray-500">(sees this route)</span></h3>
+                        <h3 class="text-xl font-semibold">🧠 Coach <span class="text-sm font-normal text-gray-500">(sees <a href="#" @click.prevent="copyCoachText()" class="text-blue-600 hover:text-blue-800 underline" x-text="coachTextCopied ? 'copied ✓' : 'this route'" title="Copy what the coach sees to clipboard">this route</a>)</span></h3>
                         <button @click="chatMessages = []; chatError = ''" x-show="chatMessages.length > 0" class="text-xs text-gray-400 hover:text-gray-600 border border-gray-200 rounded px-2 py-1">New chat</button>
                     </div>
                     <div x-ref="chatMessages" class="border border-gray-200 rounded-md p-3 bg-gray-50 overflow-y-auto space-y-3" style="min-height: 4rem; max-height: 60vh; height: auto;">

@@ -625,6 +625,17 @@ def get_route(route_id: int, db: Session = Depends(get_db)):
     return _route_detail_response(route, crud.list_route_markers(db, route_id))
 
 
+@router.get("/routes/{route_id}/coach-text")
+def get_route_coach_text(route_id: int, db: Session = Depends(get_db)):
+    """Return the exact route text the coach sees (the get_route_details tool output)."""
+    from app.llm.mcp_tools import get_route_details_tool
+
+    details = get_route_details_tool(db, route_id=route_id)
+    if details.get("error"):
+        raise HTTPException(status_code=404, detail="Route not found")
+    return {"text": details.get("text", "")}
+
+
 @router.put("/routes/{route_id}", response_model=schemas.RouteSummaryResponse)
 def update_route(route_id: int, payload: schemas.RouteUpdate, db: Session = Depends(get_db)):
     """Update route name / notes / linked session."""
