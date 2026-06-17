@@ -876,12 +876,17 @@ def build_route_text_summary(
     histogram: list[dict[str, Any]],
     track: dict[str, Any] | None = None,
     metrics: dict[str, Any] | None = None,
+    has_actuals: bool = False,
 ) -> str:
     """Compact text block describing a route for the coach LLM. Never includes track arrays.
 
     ``metrics`` (distance/elevation) and ``histogram``/``track`` all describe the route's
     primary trace — the linked Strava activity when there is one, else the GPX. Pass them in
     so the coach always sees the same numbers shown on the page.
+
+    When ``has_actuals`` is True, the planning-only gradient distribution and per-km elevation
+    profile are omitted — the appended actual-performance block carries the same info per gradient
+    bracket and per km, so emitting both just wastes tokens.
     """
     met = metrics or {
         "distance_km": route.distance_km,
@@ -898,17 +903,18 @@ def build_route_text_summary(
             f"Elevation: +{met['elevation_gain_m']:.0f} m / -{met['elevation_loss_m']:.0f} m "
             f"(min {met['min_elevation_m']:.0f} m, max {met['max_elevation_m']:.0f} m)"
         )
-        nonzero = [b for b in histogram if b["km"] > 0]
-        if nonzero:
-            lines.append("Gradient distribution:")
-            for b in nonzero:
-                lines.append(f"  {b['label']}: {b['km']} km ({b['pct_of_route']}% of route)")
-        if track:
-            km_splits = _km_splits_from_track(track)
-            if km_splits:
-                lines.append("Per-km elevation profile (D+/D-):")
-                for s in km_splits:
-                    lines.append(f"  km {s['km']}: +{s['d_plus_m']}m/-{s['d_minus_m']}m")
+        if not has_actuals:
+            nonzero = [b for b in histogram if b["km"] > 0]
+            if nonzero:
+                lines.append("Gradient distribution:")
+                for b in nonzero:
+                    lines.append(f"  {b['label']}: {b['km']} km ({b['pct_of_route']}% of route)")
+            if track:
+                km_splits = _km_splits_from_track(track)
+                if km_splits:
+                    lines.append("Per-km elevation profile (D+/D-):")
+                    for s in km_splits:
+                        lines.append(f"  km {s['km']}: +{s['d_plus_m']}m/-{s['d_minus_m']}m")
     else:
         lines.append("No elevation data for this route.")
 
