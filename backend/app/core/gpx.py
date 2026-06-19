@@ -253,6 +253,17 @@ def _build_activity_time_series(
     m = len(rows)
     pace_sm = _smooth_optional([r["pace"] for r in rows], SMOOTHING_WINDOW_POINTS)
 
+    # vertical speed (m/h, signed) from the held smoothed elevation over real time; held flat during
+    # stops, so it reads ~0 there. Smoothed with the same window as pace/slope.
+    vspeed: list[float | None] = [None] * m
+    if ele_smooth:
+        for i in range(1, m):
+            dt = rows[i]["t"] - rows[i - 1]["t"]
+            e0, e1 = rows[i - 1]["ele"], rows[i]["ele"]
+            if dt > 0 and e0 is not None and e1 is not None:
+                vspeed[i] = (float(e1) - float(e0)) / dt * 3600.0
+        vspeed = _smooth_optional(vspeed, SMOOTHING_WINDOW_POINTS)
+
     # Slope over a ~±20 m distance baseline (not ±1 sample), then smoothed, so the gradient colour
     # matches the planned route's. Per-sample central differences over the dense, variably-spaced
     # activity stream are ~3x noisier and make the gradient flicker between near-black extremes.
@@ -292,6 +303,7 @@ def _build_activity_time_series(
         "ele_m": [round(rows[i]["ele"], 1) for i in idx] if ele_smooth else None,
         "slope_pct": [slope[i] for i in idx] if ele_smooth else None,
         "pace_min_per_km": [round(pace_sm[i], 2) if pace_sm[i] is not None else None for i in idx],
+        "vspeed_m_per_h": [round(vspeed[i]) if vspeed[i] is not None else None for i in idx] if ele_smooth else None,
         "hr_bpm": [round(rows[i]["hr"]) if rows[i]["hr"] is not None else None for i in idx],
         "cadence_spm": [round(rows[i]["cad"]) if rows[i]["cad"] is not None else None for i in idx],
         "lat": col("lat"),
@@ -651,6 +663,27 @@ def _grid_metrics(
             smoothed.append(round(sum(window) / len(window), 3) if window else None)
         seg_pace = smoothed
 
+    # vertical speed per grid segment (m/h, signed: +uphill/-downhill), from smoothed elevation and
+    # moving time (stops excluded); lightly smoothed over ~9 points like the pace.
+    grid_ele = track.get("ele_m")
+    seg_vspeed: list[float | None] = [None] * n
+    if grid_ele:
+        for i in range(1, n):
+            t0v, t1v = grid_moving_time[i - 1], grid_moving_time[i]
+            if t0v is None or t1v is None:
+                continue
+            dt_s = t1v - t0v
+            if dt_s <= 0:
+                continue
+            seg_vspeed[i] = (grid_ele[i] - grid_ele[i - 1]) / dt_s * 3600.0
+        if any(v is not None for v in seg_vspeed):
+            half = SMOOTHING_WINDOW_POINTS // 2
+            smoothed_v: list[float | None] = []
+            for i in range(n):
+                window = [v for v in seg_vspeed[max(0, i - half):min(n, i + half + 1)] if v is not None]
+                smoothed_v.append(round(sum(window) / len(window), 1) if window else None)
+            seg_vspeed = smoothed_v
+
     # No smoothing for cadence: distance-based smoothing bleeds stop cadence (0 spm) into adjacent
     # moving segments, producing impossible values like 86 spm at aid stations.
     seg_cadence: list[float | None] = [round(v, 1) if v is not None else None for v in grid_cadence]
@@ -708,6 +741,7 @@ def _grid_metrics(
         for bracket_idx, (lo, hi, label) in enumerate(brackets):
             paces: list[float] = []
             hrs: list[float] = []
+            vspeeds: list[float] = []
             count = 0
             for i in range(n):
                 if _bracket_index(slope_pct[i], brackets) == bracket_idx:
@@ -716,6 +750,8 @@ def _grid_metrics(
                         paces.append(seg_pace[i])
                     if grid_hr[i] is not None:
                         hrs.append(grid_hr[i])
+                    if seg_vspeed[i] is not None:
+                        vspeeds.append(seg_vspeed[i])
             if count == 0:
                 continue
             bracket_stats.append(
@@ -726,6 +762,7 @@ def _grid_metrics(
                     "km": round(count * interval_km, 2),
                     "avg_pace_min_per_km": round(sum(paces) / len(paces), 2) if paces else None,
                     "avg_hr_bpm": round(sum(hrs) / len(hrs), 0) if hrs else None,
+                    "avg_vspeed_m_per_h": round(sum(vspeeds) / len(vspeeds), 0) if vspeeds else None,
                 }
             )
 
@@ -734,6 +771,7 @@ def _grid_metrics(
 
     return {
         "seg_pace": seg_pace,
+        "seg_vspeed": seg_vspeed,
         "grid_hr": grid_hr,
         "seg_cadence": seg_cadence,
         "km_splits": splits,
@@ -814,6 +852,7 @@ def compare_route_with_activity(track: dict[str, Any], streams: dict[str, Any]) 
     # Planned-vs-actual: activity time/HR/cadence/pace aligned onto the planned route grid.
     planned = _grid_metrics(track, time_s, dist_m, hr, cadence, cum_moving_s)
     seg_pace = planned["seg_pace"]
+    seg_vspeed = planned["seg_vspeed"]
     grid_hr = planned["grid_hr"]
     seg_cadence = planned["seg_cadence"]
     splits = planned["km_splits"]
@@ -861,6 +900,7 @@ def compare_route_with_activity(track: dict[str, Any], streams: dict[str, Any]) 
         "total_moving_s": total_moving_s,
         "total_stopped_s": max(0, total_elapsed_s - total_moving_s),
         "pace_min_per_km": seg_pace,
+        "vspeed_m_per_h": seg_vspeed,
         "hr_bpm": [round(h, 0) if h is not None else None for h in grid_hr],
         "cadence_spm": [round(c, 0) if c is not None else None for c in seg_cadence],
         "km_splits": splits,

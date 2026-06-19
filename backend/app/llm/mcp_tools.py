@@ -1358,7 +1358,8 @@ def get_route_details_tool(db: DBSession, *, route_id: int) -> dict[str, Any]:
             lines.append("Moving pace per gradient bracket:")
             for b in brackets:
                 hr_text = f", HR {b['avg_hr_bpm']:.0f} bpm" if b.get("avg_hr_bpm") is not None else ""
-                lines.append(f"  {b['label']}: {b['km']} km, avg {_fmt_pace(b['avg_pace_min_per_km'])}{hr_text}")
+                vam_text = f", vert {b['avg_vspeed_m_per_h']:+.0f} m/h" if b.get("avg_vspeed_m_per_h") is not None else ""
+                lines.append(f"  {b['label']}: {b['km']} km, avg {_fmt_pace(b['avg_pace_min_per_km'])}{hr_text}{vam_text}")
         splits = comparison.get("km_splits") or []
         if splits:
             lines.append("Per-km splits (km: elapsed time [stopped time if any], HR, D+/D-):")

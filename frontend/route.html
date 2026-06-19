@@ -251,6 +251,10 @@
                                     <input type="checkbox" x-model="showCadenceOverlay" @change="updateOverlayVisibility()">
                                     <span class="text-emerald-700">Cadence</span>
                                 </label>
+                                <label class="inline-flex items-center gap-1.5 cursor-pointer">
+                                    <input type="checkbox" x-model="showVspeedOverlay" @change="updateOverlayVisibility()">
+                                    <span class="text-violet-700">Vert. speed</span>
+                                </label>
                                 <div class="flex rounded border border-gray-300 overflow-hidden text-xs ml-1">
                                     <button @click="setXAxisMode('distance')"
                                         :class="xAxisMode === 'distance' ? 'bg-gray-200 font-semibold text-gray-800' : 'bg-white text-gray-500 hover:bg-gray-50'"
@@ -308,6 +312,7 @@
                                             <th class="py-1 pr-3 font-medium">Gradient</th>
                                             <th class="py-1 pr-3 font-medium">Km</th>
                                             <th class="py-1 pr-3 font-medium">Moving pace (min/km)</th>
+                                            <th class="py-1 pr-3 font-medium">Vert. speed (m/h)</th>
                                             <th class="py-1 font-medium">Avg HR (bpm)</th>
                                         </tr>
                                     </thead>
@@ -317,6 +322,7 @@
                                                 <td class="py-1 pr-3" x-text="b.label"></td>
                                                 <td class="py-1 pr-3" x-text="b.km"></td>
                                                 <td class="py-1 pr-3" x-text="formatPace(b.avg_pace_min_per_km)"></td>
+                                                <td class="py-1 pr-3" x-text="b.avg_vspeed_m_per_h != null ? Math.round(b.avg_vspeed_m_per_h) : '—'"></td>
                                                 <td class="py-1" x-text="b.avg_hr_bpm !== null ? Math.round(b.avg_hr_bpm) : '—'"></td>
                                             </tr>
                                         </template>

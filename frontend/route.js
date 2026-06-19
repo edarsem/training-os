@@ -302,6 +302,7 @@ document.addEventListener('alpine:init', () => {
         showPaceOverlay: false,
         showHrOverlay: false,
         showCadenceOverlay: false,
+        showVspeedOverlay: false,
         xAxisMode: 'distance',
 
         chatMessages: [],
@@ -369,6 +370,7 @@ document.addEventListener('alpine:init', () => {
             this.showPaceOverlay = false;
             this.showHrOverlay = false;
             this.showCadenceOverlay = false;
+            this.showVspeedOverlay = false;
             this.xAxisMode = 'distance';
             this.showPlannedTrace = true;
             this.showActualTrace = true;
@@ -632,6 +634,16 @@ document.addEventListener('alpine:init', () => {
                             borderColor: '#7c3aed',
                             borderWidth: 2,
                         },
+                        {
+                            label: 'Vert. speed (m/h)',
+                            data: [],
+                            yAxisID: 'vspeed',
+                            borderColor: 'rgba(139, 92, 246, 0.8)',
+                            pointRadius: 0,
+                            borderWidth: 1.5,
+                            spanGaps: true,
+                            hidden: true,
+                        },
                     ],
                 },
                 plugins: [stopLinesPlugin],
@@ -680,6 +692,12 @@ document.addEventListener('alpine:init', () => {
                             display: false,
                             grid: { drawOnChartArea: false },
                             title: { display: true, text: 'Cadence (spm)' },
+                        },
+                        vspeed: {
+                            position: 'right',
+                            display: false,
+                            grid: { drawOnChartArea: false },
+                            title: { display: true, text: 'Vert. speed (m/h)' },
                         },
                     },
                     plugins: {
@@ -1096,6 +1114,7 @@ document.addEventListener('alpine:init', () => {
                 this.showPaceOverlay = false;
                 this.showHrOverlay = false;
                 this.showCadenceOverlay = false;
+                this.showVspeedOverlay = false;
                 this.xAxisMode = 'distance';
                 cumulativeTimeS = null;
                 if (actualPolyline && map) { map.removeLayer(actualPolyline); actualPolyline = null; }
@@ -1149,7 +1168,7 @@ document.addEventListener('alpine:init', () => {
                     mode: this.xAxisMode, source: 'activity', n: ts.n,
                     x: timeX ? ts.t_s : ts.dist_km, ele: ts.ele_m, slope: ts.slope_pct,
                     lat: ts.lat, lng: ts.lng, distKm: ts.dist_km, timeS: ts.t_s,
-                    pace: ts.pace_min_per_km, hr: ts.hr_bpm, cad: ts.cadence_spm,
+                    pace: ts.pace_min_per_km, hr: ts.hr_bpm, cad: ts.cadence_spm, vspeed: ts.vspeed_m_per_h,
                 };
             } else {
                 const t = currentTrack;
@@ -1157,7 +1176,7 @@ document.addEventListener('alpine:init', () => {
                     mode: 'distance', source: 'planned', n: t.n,
                     x: t.dist_km, ele: t.ele_m, slope: t.slope_pct,
                     lat: t.lat, lng: t.lng, distKm: t.dist_km, timeS: cumulativeTimeS,
-                    pace: this.comparison?.pace_min_per_km, hr: this.comparison?.hr_bpm, cad: this.comparison?.cadence_spm,
+                    pace: this.comparison?.pace_min_per_km, hr: this.comparison?.hr_bpm, cad: this.comparison?.cadence_spm, vspeed: this.comparison?.vspeed_m_per_h,
                 };
             }
         },
@@ -1182,6 +1201,7 @@ document.addEventListener('alpine:init', () => {
             elevationChart.data.datasets[2].data = activeProfile.pace ? xyData(activeProfile.pace) : [];
             elevationChart.data.datasets[3].data = activeProfile.hr ? xyData(activeProfile.hr) : [];
             elevationChart.data.datasets[4].data = activeProfile.cad ? xyData(activeProfile.cad) : [];
+            elevationChart.data.datasets[6].data = activeProfile.vspeed ? xyData(activeProfile.vspeed) : [];
             elevationChart.$xAxisMode = this.xAxisMode;
             const xAxis = elevationChart.options.scales.x;
             xAxis.max = activeProfile.x[activeProfile.n - 1];
@@ -1207,12 +1227,15 @@ document.addEventListener('alpine:init', () => {
             const showPace = !!(this.comparison && this.showPaceOverlay);
             const showHr = !!(this.comparison && this.showHrOverlay);
             const showCadence = !!(this.comparison && this.showCadenceOverlay);
+            const showVspeed = !!(this.comparison && this.showVspeedOverlay);
             elevationChart.data.datasets[2].hidden = !showPace;
             elevationChart.data.datasets[3].hidden = !showHr;
             elevationChart.data.datasets[4].hidden = !showCadence;
+            elevationChart.data.datasets[6].hidden = !showVspeed;
             elevationChart.options.scales.pace.display = showPace;
             elevationChart.options.scales.hr.display = showHr;
             elevationChart.options.scales.cadence.display = showCadence;
+            elevationChart.options.scales.vspeed.display = showVspeed;
             elevationChart.update('none');
         },
 

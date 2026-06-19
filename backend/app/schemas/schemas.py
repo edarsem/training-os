@@ -308,6 +308,7 @@ class RouteComparisonResponse(BaseModel):
     total_moving_s: Optional[int] = None
     total_stopped_s: Optional[int] = None
     pace_min_per_km: List[Optional[float]] = Field(default_factory=list)
+    vspeed_m_per_h: List[Optional[float]] = Field(default_factory=list)
     hr_bpm: List[Optional[float]] = Field(default_factory=list)
     cadence_spm: List[Optional[float]] = Field(default_factory=list)
     km_splits: List[dict[str, Any]] = Field(default_factory=list)
