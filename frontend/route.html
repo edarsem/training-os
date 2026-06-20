@@ -150,7 +150,7 @@
                 <div class="flex items-center gap-2 mb-2">
                     <button @click="openNoteAtPinned()" :disabled="!pinnedDistanceKm" :class="pinnedDistanceKm ? 'bg-blue-600 text-white' : 'bg-white text-gray-400 border-gray-200'" class="px-3 py-1.5 border rounded shadow-sm text-sm font-medium" title="Press N">📝 Add note<span x-show="pinnedDistanceKm" x-text="pinnedDistanceKm ? ' (km ' + pinnedDistanceKm + ')' : ''"></span></button>
                     <span x-show="pinnedDistanceKm" x-cloak class="text-sm text-violet-600">📍 pinned — click again anywhere to unpin · press N to add note</span>
-                    <span x-show="!pinnedDistanceKm" class="text-sm text-gray-400">Click on the map or elevation profile to pin a location</span>
+                    <span x-show="!pinnedDistanceKm" class="text-sm text-gray-400">Click to pin a location · drag across the profile to select a section</span>
                 </div>
                 <!-- Pinned location info panel -->
                 <div x-show="pinnedInfo" x-cloak class="flex flex-wrap items-center gap-4 text-xs text-gray-700 bg-slate-50 border border-slate-200 rounded px-3 py-1.5 mb-3 font-mono">
@@ -160,6 +160,21 @@
                     <span x-show="pinnedInfo && pinnedInfo.pace !== null">🏃 <span x-text="pinnedInfo ? formatPace(pinnedInfo.pace) + '/km' : ''"></span></span>
                     <span x-show="pinnedInfo && pinnedInfo.hr !== null">♥ <span x-text="pinnedInfo ? pinnedInfo.hr + ' bpm' : ''"></span></span>
                     <span x-show="pinnedInfo && pinnedInfo.cadence !== null">👟 <span x-text="pinnedInfo ? pinnedInfo.cadence + ' spm' : ''"></span></span>
+                </div>
+
+                <!-- Selected section summary (drag across the elevation profile to select) -->
+                <div x-show="segmentSummary" x-cloak class="flex flex-wrap items-center gap-4 text-xs text-gray-800 bg-blue-50 border border-blue-200 rounded px-3 py-1.5 mb-3 font-mono">
+                    <button @click="exitSegment()" class="px-2 py-0.5 bg-white border border-blue-300 text-blue-700 rounded text-xs font-medium hover:bg-blue-100" title="Esc">← Back</button>
+                    <span class="font-semibold">📐 Section</span>
+                    <span x-show="segmentSummary">📏 <span x-text="segmentSummary ? segmentSummary.distanceKm.toFixed(2) + ' km' : ''"></span></span>
+                    <span x-show="segmentSummary && segmentSummary.timeS !== null">⏱ <span x-text="segmentSummary ? formatSplitTime(segmentSummary.timeS) : ''"></span></span>
+                    <span x-show="segmentSummary && segmentSummary.eleMin !== null">↕ <span x-text="segmentSummary ? Math.round(segmentSummary.eleMin) + '–' + Math.round(segmentSummary.eleMax) + ' m' : ''"></span></span>
+                    <span x-show="segmentSummary && (segmentSummary.dPlus || segmentSummary.dMinus)">⛰️ <span x-text="segmentSummary ? '+' + Math.round(segmentSummary.dPlus) + ' / -' + Math.round(segmentSummary.dMinus) + ' m' : ''"></span></span>
+                    <span x-show="segmentSummary && segmentSummary.avgSlope !== null"><span x-text="segmentSummary ? (segmentSummary.avgSlope > 0 ? '+' : '') + segmentSummary.avgSlope.toFixed(1) + '%' : ''"></span></span>
+                    <span x-show="segmentSummary && segmentSummary.avgPace !== null">🏃 <span x-text="segmentSummary ? formatPace(segmentSummary.avgPace) + '/km' : ''"></span></span>
+                    <span x-show="segmentSummary && segmentSummary.avgHr !== null">♥ <span x-text="segmentSummary ? Math.round(segmentSummary.avgHr) + ' bpm' : ''"></span></span>
+                    <span x-show="segmentSummary && segmentSummary.avgCadence !== null">👟 <span x-text="segmentSummary ? Math.round(segmentSummary.avgCadence) + ' spm' : ''"></span></span>
+                    <span x-show="segmentSummary && segmentSummary.avgVspeed !== null">↗ <span x-text="segmentSummary ? Math.round(segmentSummary.avgVspeed) + ' m/h' : ''"></span></span>
                 </div>
 
                 <!-- Strava activity match -->

@@ -17,6 +17,16 @@ let kmMarkers = [];
 let pinnedDot = null;
 let pinnedTrackIdx = null;
 let cumulativeTimeS = null;
+// Drag-to-select section state. segmentLayer is the highlighted map polyline for the active
+// section; segmentRange is {i0, i1} indices into activeProfile. Both live outside Alpine.
+let segmentLayer = null;
+let segmentRange = null;
+// Drag-select gesture state (module-level so the window-level mouseup that ends the drag — which
+// may fire outside the canvas — sees it). routeComponent is the Alpine instance, set in init().
+let dragging = false;
+let dragStartPx = 0;
+let routeComponent = null;
+let dragMouseupBound = false;
 // The profile/overlay arrays the elevation chart currently renders. In 'distance' mode this is
 // a view over currentTrack + comparison overlays (20 m grid); in 'time' mode it is the activity's
 // time-sampled series (comparison.time_series), which represents pauses as flat plateaus.
@@ -69,6 +79,8 @@ function destroyVisuals() {
     pinnedTrackIdx = null;
     cumulativeTimeS = null;
     activeProfile = null;
+    segmentLayer = null;
+    segmentRange = null;
 }
 
 function clearBracketHighlight() {
@@ -185,6 +197,98 @@ function buildCumulativeTime(comparison, track) {
     return result;
 }
 
+function indexForX(xVal) {
+    // Nearest activeProfile index for an x-axis value (distance km or time s, per current mode).
+    if (!activeProfile) return 0;
+    let best = 0;
+    let bestDiff = Infinity;
+    for (let i = 0; i < activeProfile.n; i++) {
+        const diff = Math.abs(activeProfile.x[i] - xVal);
+        if (diff < bestDiff) { bestDiff = diff; best = i; }
+    }
+    return best;
+}
+
+function computeSegmentSummary(i0, i1) {
+    // Averaged metrics over activeProfile[i0..i1]. Only includes fields whose source arrays
+    // exist, so the panel adapts to planning (elevation/slope only) vs activity (pace/HR/...).
+    if (!activeProfile || i1 <= i0) return null;
+    const p = activeProfile;
+    const out = {
+        distanceKm: p.distKm[i1] - p.distKm[i0],
+        timeS: p.timeS?.[i0] != null && p.timeS?.[i1] != null ? p.timeS[i1] - p.timeS[i0] : null,
+        dPlus: 0,
+        dMinus: 0,
+        eleMin: null,
+        eleMax: null,
+        avgSlope: null,
+        avgPace: null,
+        avgHr: null,
+        avgCadence: null,
+        avgVspeed: null,
+    };
+    // D+/D- and elevation extent from the (smoothed) elevation series.
+    if (p.ele) {
+        let mn = Infinity;
+        let mx = -Infinity;
+        for (let i = i0; i <= i1; i++) {
+            const e = p.ele[i];
+            if (e == null) continue;
+            if (i > i0 && p.ele[i - 1] != null) {
+                const d = e - p.ele[i - 1];
+                if (d > 0) out.dPlus += d; else out.dMinus -= d;
+            }
+            if (e < mn) mn = e;
+            if (e > mx) mx = e;
+        }
+        if (isFinite(mn)) { out.eleMin = mn; out.eleMax = mx; }
+    }
+    // Distance-weighted averages: weight each point by the distance to the next point.
+    const avgOf = (arr) => {
+        if (!arr) return null;
+        let wsum = 0;
+        let vsum = 0;
+        for (let i = i0; i < i1; i++) {
+            const v = arr[i];
+            if (v == null || !isFinite(v)) continue;
+            const w = (p.distKm[i + 1] ?? p.distKm[i]) - p.distKm[i];
+            if (w <= 0) continue;
+            wsum += w;
+            vsum += v * w;
+        }
+        return wsum > 0 ? vsum / wsum : null;
+    };
+    out.avgSlope = avgOf(p.slope);
+    out.avgPace = avgOf(p.pace);
+    out.avgHr = avgOf(p.hr);
+    out.avgCadence = avgOf(p.cad);
+    out.avgVspeed = avgOf(p.vspeed);
+    return out;
+}
+
+// Translucent rectangle drawn over the elevation chart while the user is drag-selecting a section.
+const segmentSelectionPlugin = {
+    id: 'segmentSelection',
+    afterDraw(chart) {
+        const sel = chart.$dragSel;
+        if (!sel) return;
+        const { top, bottom } = chart.chartArea;
+        const x0 = Math.min(sel.startPx, sel.currentPx);
+        const x1 = Math.max(sel.startPx, sel.currentPx);
+        const ctx = chart.ctx;
+        ctx.save();
+        ctx.fillStyle = 'rgba(37, 99, 235, 0.12)';
+        ctx.fillRect(x0, top, x1 - x0, bottom - top);
+        ctx.strokeStyle = 'rgba(37, 99, 235, 0.6)';
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.moveTo(x0, top); ctx.lineTo(x0, bottom);
+        ctx.moveTo(x1, top); ctx.lineTo(x1, bottom);
+        ctx.stroke();
+        ctx.restore();
+    },
+};
+
 function showPinnedAtIndex(idx) {
     if (!activeProfile || idx === null || idx < 0 || idx >= activeProfile.n) return;
     if (activeProfile.lat[idx] == null) return;
@@ -275,6 +379,7 @@ document.addEventListener('alpine:init', () => {
 
         pinnedDistanceKm: null,
         pinnedInfo: null,
+        segmentSummary: null,
         dataSource: 'gpx',
         stravaElevGain: 0,
         stravaElevLoss: 0,
@@ -330,11 +435,33 @@ document.addEventListener('alpine:init', () => {
                 this.selectedChatModel = stored;
             }
             document.addEventListener('keydown', (e) => {
+                if (e.key === 'Escape' && this.segmentSummary) { this.exitSegment(); return; }
                 if ((e.key === 'n' || e.key === 'N') &&
                     !['INPUT', 'TEXTAREA', 'SELECT'].includes(document.activeElement?.tagName || '')) {
                     this.openNoteAtPinned();
                 }
             });
+            routeComponent = this;
+            if (!dragMouseupBound) {
+                dragMouseupBound = true;
+                window.addEventListener('mouseup', () => {
+                    if (!dragging || !elevationChart) return;
+                    dragging = false;
+                    const sel = elevationChart.$dragSel;
+                    elevationChart.$dragSel = null;
+                    if (!sel) { elevationChart.update('none'); return; }
+                    if (Math.abs(sel.currentPx - sel.startPx) < 6) { elevationChart.update('none'); return; }
+                    if (routeComponent) routeComponent._suppressClick = true;  // trailing click must not pin
+                    // If the click never fires (released outside the canvas), don't poison the next one.
+                    setTimeout(() => { if (routeComponent) routeComponent._suppressClick = false; }, 0);
+                    const xScale = elevationChart.scales.x;
+                    let i0 = indexForX(xScale.getValueForPixel(Math.min(sel.startPx, sel.currentPx)));
+                    let i1 = indexForX(xScale.getValueForPixel(Math.max(sel.startPx, sel.currentPx)));
+                    if (i1 < i0) { const t = i0; i0 = i1; i1 = t; }
+                    if (i1 > i0 && routeComponent) routeComponent.enterSegment(i0, i1);
+                    else elevationChart.update('none');
+                });
+            }
             await this.fetchRoutes();
             if (this.routes.length > 0) {
                 this.selectedRouteId = String(this.routes[0].id);
@@ -646,7 +773,7 @@ document.addEventListener('alpine:init', () => {
                         },
                     ],
                 },
-                plugins: [stopLinesPlugin],
+                plugins: [stopLinesPlugin, segmentSelectionPlugin],
                 options: {
                     responsive: true,
                     maintainAspectRatio: false,
@@ -657,6 +784,7 @@ document.addEventListener('alpine:init', () => {
                         if (points.length > 0) showHoverAtIndex(points[0].index);
                     },
                     onClick: (event, elements, chart) => {
+                        if (self._suppressClick) { self._suppressClick = false; return; }
                         const markerHits = chart.getElementsAtEventForMode(event, 'point', { intersect: true }, true)
                             .filter((el) => el.datasetIndex === 1);
                         if (markerHits.length > 0) {
@@ -757,7 +885,69 @@ document.addEventListener('alpine:init', () => {
             });
 
             canvas.addEventListener('mouseleave', hideHover);
+
+            // Drag horizontally to select a section. A short drag (< 6px) falls through to the
+            // click-to-pin handler; a real drag selects a range and enters the section view. The
+            // mouseup that ends the gesture is bound once on window (see init) so a release outside
+            // the canvas still finalizes the selection.
+            const clampX = (px) => Math.max(elevationChart.chartArea.left, Math.min(elevationChart.chartArea.right, px));
+            canvas.addEventListener('mousedown', (e) => {
+                if (e.button !== 0 || !elevationChart) return;
+                dragging = true;
+                dragStartPx = clampX(e.offsetX);
+                elevationChart.$dragSel = null;
+            });
+            canvas.addEventListener('mousemove', (e) => {
+                if (!dragging || !elevationChart) return;
+                elevationChart.$dragSel = { startPx: dragStartPx, currentPx: clampX(e.offsetX) };
+                elevationChart.update('none');
+            });
+
             this.updateMarkerOverlayDataset();
+        },
+
+        enterSegment(i0, i1) {
+            if (!activeProfile || !elevationChart) return;
+            segmentRange = { i0, i1 };
+            this.segmentSummary = computeSegmentSummary(i0, i1);
+            // Zoom the profile into the selected x-range.
+            elevationChart.$dragSel = null;
+            elevationChart.options.scales.x.min = activeProfile.x[i0];
+            elevationChart.options.scales.x.max = activeProfile.x[i1];
+            elevationChart.update('none');
+            // Focus the map: highlight the section, dim the rest, and fit to it.
+            if (map) {
+                if (segmentLayer) { map.removeLayer(segmentLayer); segmentLayer = null; }
+                const seg = [];
+                for (let i = i0; i <= i1; i++) {
+                    if (activeProfile.lat[i] != null && activeProfile.lng[i] != null) {
+                        seg.push([activeProfile.lat[i], activeProfile.lng[i]]);
+                    }
+                }
+                if (seg.length > 1) {
+                    segmentLayer = L.polyline(seg, { color: '#2563eb', weight: 6, opacity: 1 }).addTo(map);
+                    if (trackPolyline) trackPolyline.setStyle({ opacity: 0.25 });
+                    map.fitBounds(segmentLayer.getBounds(), { padding: [30, 30] });
+                }
+            }
+        },
+
+        exitSegment() {
+            if (!this.segmentSummary && !segmentRange) return;
+            this.segmentSummary = null;
+            segmentRange = null;
+            if (elevationChart && activeProfile) {
+                elevationChart.options.scales.x.min = 0;
+                elevationChart.options.scales.x.max = activeProfile.x[activeProfile.n - 1];
+                elevationChart.update('none');
+            }
+            if (map) {
+                if (segmentLayer) { map.removeLayer(segmentLayer); segmentLayer = null; }
+                if (trackPolyline) {
+                    trackPolyline.setStyle({ opacity: plannedTraceVisible ? plannedTraceBaseOpacity : 0 });
+                    map.fitBounds(trackPolyline.getBounds(), { padding: [30, 30] });
+                }
+            }
         },
 
         updateMarkerOverlayDataset() {
@@ -890,6 +1080,7 @@ document.addEventListener('alpine:init', () => {
         },
 
         setDataSource(source) {
+            this.exitSegment();
             this.dataSource = source;
             this.updateTraceVisibility();
             // every analysis follows the primary trace: profile, histogram, km table, brackets, map
@@ -1190,6 +1381,7 @@ document.addEventListener('alpine:init', () => {
 
         setXAxisMode(mode) {
             if (!elevationChart || !currentTrack) return;
+            this.exitSegment();
             // capture the pinned point's geographic position before the profile (and its index
             // space) changes, so we can re-anchor it by location rather than by distance number
             const pinnedGeo = (pinnedTrackIdx !== null && activeProfile && activeProfile.lat?.[pinnedTrackIdx] != null)
