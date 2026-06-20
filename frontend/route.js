@@ -915,7 +915,8 @@ document.addEventListener('alpine:init', () => {
             elevationChart.options.scales.x.min = activeProfile.x[i0];
             elevationChart.options.scales.x.max = activeProfile.x[i1];
             elevationChart.update('none');
-            // Focus the map: highlight the section, dim the rest, and fit to it.
+            // Focus the map: fade the rest of the trace right down, draw the section at the trace's
+            // normal style on top, and fit to it.
             if (map) {
                 if (segmentLayer) { map.removeLayer(segmentLayer); segmentLayer = null; }
                 const seg = [];
@@ -925,8 +926,10 @@ document.addEventListener('alpine:init', () => {
                     }
                 }
                 if (seg.length > 1) {
-                    segmentLayer = L.polyline(seg, { color: '#2563eb', weight: 6, opacity: 1 }).addTo(map);
-                    if (trackPolyline) trackPolyline.setStyle({ opacity: 0.25 });
+                    // Fade both traces (planned + actual); the primary visible one depends on dataSource.
+                    if (trackPolyline) trackPolyline.setStyle({ opacity: 0.35 });
+                    if (actualPolyline) actualPolyline.setStyle({ opacity: 0.35 });
+                    segmentLayer = L.polyline(seg, { color: '#2563eb', weight: 4, opacity: 1 }).addTo(map);
                     map.fitBounds(segmentLayer.getBounds(), { padding: [30, 30] });
                 }
             }
@@ -943,10 +946,8 @@ document.addEventListener('alpine:init', () => {
             }
             if (map) {
                 if (segmentLayer) { map.removeLayer(segmentLayer); segmentLayer = null; }
-                if (trackPolyline) {
-                    trackPolyline.setStyle({ opacity: plannedTraceVisible ? plannedTraceBaseOpacity : 0 });
-                    map.fitBounds(trackPolyline.getBounds(), { padding: [30, 30] });
-                }
+                this.updateTraceVisibility();  // restores both planned + actual trace styles/opacity
+                if (trackPolyline) map.fitBounds(trackPolyline.getBounds(), { padding: [30, 30] });
             }
         },
 
